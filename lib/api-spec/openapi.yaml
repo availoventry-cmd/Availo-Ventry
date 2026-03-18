@@ -1,0 +1,2954 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Availo Ventry - Smart Visitor Management Platform API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: organizations
+    description: Organization management
+  - name: branches
+    description: Branch management
+  - name: users
+    description: User management
+  - name: invitations
+    description: User invitation management
+  - name: visitors
+    description: Visitor management
+  - name: visit-requests
+    description: Visit request management
+  - name: blacklist
+    description: Blacklist management
+  - name: audit-logs
+    description: Audit log access
+  - name: dashboard
+    description: Dashboard analytics
+  - name: public
+    description: Public-facing endpoints (no auth required)
+  - name: notifications
+    description: Notification management
+  - name: reports
+    description: Reports and analytics
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # ─── AUTH ───────────────────────────────────────────────────────────────────
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout current user
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get current authenticated user
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Current user info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/accept-invitation:
+    post:
+      operationId: acceptInvitation
+      tags: [auth]
+      summary: Accept an invitation and set up account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInvitationRequest"
+      responses:
+        "200":
+          description: Invitation accepted, account set up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/verify-invitation-token:
+    get:
+      operationId: verifyInvitationToken
+      tags: [auth]
+      summary: Verify invitation token validity
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Token info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvitationTokenInfo"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change user password
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── ORGANIZATIONS ───────────────────────────────────────────────────────────
+
+  /organizations:
+    get:
+      operationId: listOrganizations
+      tags: [organizations]
+      summary: List all organizations (Super Admin only)
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/OrgStatus"
+        - name: type
+          in: query
+          schema:
+            $ref: "#/components/schemas/OrgType"
+        - name: tier
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of organizations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedOrganizations"
+    post:
+      operationId: createOrganization
+      tags: [organizations]
+      summary: Create new organization (Super Admin only)
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationRequest"
+      responses:
+        "201":
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+
+  /organizations/{orgId}:
+    get:
+      operationId: getOrganization
+      tags: [organizations]
+      summary: Get organization by ID
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      responses:
+        "200":
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+    put:
+      operationId: updateOrganization
+      tags: [organizations]
+      summary: Update organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationRequest"
+      responses:
+        "200":
+          description: Organization updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+
+  /organizations/{orgId}/status:
+    patch:
+      operationId: updateOrganizationStatus
+      tags: [organizations]
+      summary: Activate, suspend, or deactivate organization (Super Admin only)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrgStatusRequest"
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+
+  /organizations/{orgId}/stats:
+    get:
+      operationId: getOrganizationStats
+      tags: [organizations]
+      summary: Get organization statistics
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      responses:
+        "200":
+          description: Organization statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgStats"
+
+  # ─── BRANCHES ────────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/branches:
+    get:
+      operationId: listBranches
+      tags: [branches]
+      summary: List branches of an organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      responses:
+        "200":
+          description: List of branches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Branch"
+    post:
+      operationId: createBranch
+      tags: [branches]
+      summary: Create new branch
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBranchRequest"
+      responses:
+        "201":
+          description: Branch created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+
+  /organizations/{orgId}/branches/{branchId}:
+    get:
+      operationId: getBranch
+      tags: [branches]
+      summary: Get branch by ID
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/branchId"
+      responses:
+        "200":
+          description: Branch details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+    put:
+      operationId: updateBranch
+      tags: [branches]
+      summary: Update branch
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/branchId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBranchRequest"
+      responses:
+        "200":
+          description: Branch updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+    delete:
+      operationId: deactivateBranch
+      tags: [branches]
+      summary: Deactivate a branch
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/branchId"
+      responses:
+        "200":
+          description: Branch deactivated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── USERS ───────────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List users in an organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: role
+          in: query
+          schema:
+            $ref: "#/components/schemas/UserRole"
+        - name: branchId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, invited, deactivated]
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedUsers"
+
+  /organizations/{orgId}/users/{userId}:
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get user by ID
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    put:
+      operationId: updateUser
+      tags: [users]
+      summary: Update user details
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /organizations/{orgId}/users/{userId}/deactivate:
+    patch:
+      operationId: deactivateUser
+      tags: [users]
+      summary: Deactivate a user
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: User deactivated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /organizations/{orgId}/users/{userId}/reactivate:
+    patch:
+      operationId: reactivateUser
+      tags: [users]
+      summary: Reactivate a user
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: User reactivated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /organizations/{orgId}/users/{userId}/reset-password:
+    post:
+      operationId: resetUserPassword
+      tags: [users]
+      summary: Force reset user password (send reset link)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: Reset email sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── INVITATIONS ─────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/invitations:
+    get:
+      operationId: listInvitations
+      tags: [invitations]
+      summary: List invitations for an organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, accepted, expired, revoked]
+      responses:
+        "200":
+          description: List of invitations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invitation"
+    post:
+      operationId: createInvitation
+      tags: [invitations]
+      summary: Invite a new user
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvitationRequest"
+      responses:
+        "201":
+          description: Invitation sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+
+  /organizations/{orgId}/invitations/{invitationId}/resend:
+    post:
+      operationId: resendInvitation
+      tags: [invitations]
+      summary: Resend an invitation
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/invitationId"
+      responses:
+        "200":
+          description: Invitation resent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+
+  /organizations/{orgId}/invitations/{invitationId}/revoke:
+    patch:
+      operationId: revokeInvitation
+      tags: [invitations]
+      summary: Revoke a pending invitation
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/invitationId"
+      responses:
+        "200":
+          description: Invitation revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── VISITORS ────────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/visitors:
+    get:
+      operationId: listVisitors
+      tags: [visitors]
+      summary: List visitors for an organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: isBlacklisted
+          in: query
+          schema:
+            type: boolean
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of visitors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedVisitors"
+
+  /organizations/{orgId}/visitors/{visitorId}:
+    get:
+      operationId: getVisitor
+      tags: [visitors]
+      summary: Get visitor by ID
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/visitorId"
+      responses:
+        "200":
+          description: Visitor details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitorDetail"
+
+  # ─── VISIT REQUESTS ──────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/visit-requests:
+    get:
+      operationId: listVisitRequests
+      tags: [visit-requests]
+      summary: List visit requests for an organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/VisitRequestStatus"
+        - name: type
+          in: query
+          schema:
+            $ref: "#/components/schemas/VisitRequestType"
+        - name: branchId
+          in: query
+          schema:
+            type: string
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of visit requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedVisitRequests"
+    post:
+      operationId: createVisitRequest
+      tags: [visit-requests]
+      summary: Create a new visit request (host-initiated)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVisitRequestRequest"
+      responses:
+        "201":
+          description: Visit request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/{requestId}:
+    get:
+      operationId: getVisitRequest
+      tags: [visit-requests]
+      summary: Get visit request by ID
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/requestId"
+      responses:
+        "200":
+          description: Visit request details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/{requestId}/approve:
+    patch:
+      operationId: approveVisitRequest
+      tags: [visit-requests]
+      summary: Approve a visit request
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/requestId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveRejectRequest"
+      responses:
+        "200":
+          description: Request approved, QR code generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/{requestId}/reject:
+    patch:
+      operationId: rejectVisitRequest
+      tags: [visit-requests]
+      summary: Reject a visit request
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/requestId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveRejectRequest"
+      responses:
+        "200":
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/{requestId}/cancel:
+    patch:
+      operationId: cancelVisitRequest
+      tags: [visit-requests]
+      summary: Cancel a visit request (host only)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/requestId"
+      responses:
+        "200":
+          description: Request cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/{requestId}/check-in:
+    patch:
+      operationId: checkInVisitor
+      tags: [visit-requests]
+      summary: Check in a visitor (receptionist)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/requestId"
+      responses:
+        "200":
+          description: Visitor checked in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/{requestId}/check-out:
+    patch:
+      operationId: checkOutVisitor
+      tags: [visit-requests]
+      summary: Check out a visitor (receptionist)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/requestId"
+      responses:
+        "200":
+          description: Visitor checked out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+
+  /organizations/{orgId}/visit-requests/scan-qr:
+    post:
+      operationId: scanQrCode
+      tags: [visit-requests]
+      summary: Scan a QR code to find visit request (receptionist)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanQrRequest"
+      responses:
+        "200":
+          description: Visit request found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitRequest"
+        "404":
+          description: QR code not found or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /organizations/{orgId}/visit-requests/batch-approve:
+    post:
+      operationId: batchApproveVisitRequests
+      tags: [visit-requests]
+      summary: Batch approve multiple visit requests
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchActionRequest"
+      responses:
+        "200":
+          description: Requests approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchActionResponse"
+
+  /organizations/{orgId}/visit-requests/batch-reject:
+    post:
+      operationId: batchRejectVisitRequests
+      tags: [visit-requests]
+      summary: Batch reject multiple visit requests
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchActionRequest"
+      responses:
+        "200":
+          description: Requests rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchActionResponse"
+
+  # ─── BLACKLIST ───────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/blacklist:
+    get:
+      operationId: listBlacklist
+      tags: [blacklist]
+      summary: List blacklisted visitors
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of blacklisted visitors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedBlacklist"
+    post:
+      operationId: addToBlacklist
+      tags: [blacklist]
+      summary: Add visitor to blacklist
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddToBlacklistRequest"
+      responses:
+        "201":
+          description: Added to blacklist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlacklistEntry"
+
+  /organizations/{orgId}/blacklist/{blacklistId}:
+    delete:
+      operationId: removeFromBlacklist
+      tags: [blacklist]
+      summary: Remove visitor from blacklist
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: blacklistId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed from blacklist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── DASHBOARD ───────────────────────────────────────────────────────────────
+
+  /dashboard/super-admin:
+    get:
+      operationId: getSuperAdminDashboard
+      tags: [dashboard]
+      summary: Super Admin platform-wide dashboard
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Super Admin dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuperAdminDashboard"
+
+  /dashboard/org/{orgId}:
+    get:
+      operationId: getOrgDashboard
+      tags: [dashboard]
+      summary: Org Admin dashboard
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      responses:
+        "200":
+          description: Org dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgDashboard"
+
+  /dashboard/branch/{branchId}:
+    get:
+      operationId: getBranchDashboard
+      tags: [dashboard]
+      summary: Branch-level dashboard (Visitor Manager / Receptionist)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/branchId"
+      responses:
+        "200":
+          description: Branch dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchDashboard"
+
+  /dashboard/host:
+    get:
+      operationId: getHostDashboard
+      tags: [dashboard]
+      summary: Host Employee dashboard
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Host dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HostDashboard"
+
+  # ─── AUDIT LOGS ──────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/audit-logs:
+    get:
+      operationId: listAuditLogs
+      tags: [audit-logs]
+      summary: List audit logs for an organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: userId
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          schema:
+            type: string
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of audit logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+
+  # ─── REPORTS ─────────────────────────────────────────────────────────────────
+
+  /organizations/{orgId}/reports/visitor-traffic:
+    get:
+      operationId: getVisitorTrafficReport
+      tags: [reports]
+      summary: Visitor traffic report
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [daily, weekly, monthly]
+            default: weekly
+        - name: branchId
+          in: query
+          schema:
+            type: string
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Visitor traffic data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitorTrafficReport"
+
+  # ─── PUBLIC ENDPOINTS ────────────────────────────────────────────────────────
+
+  /public/orgs/{slug}:
+    get:
+      operationId: getPublicOrgInfo
+      tags: [public]
+      summary: Get public organization info by slug
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Public org info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicOrgInfo"
+        "404":
+          description: Organization not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /public/orgs/{slug}/book:
+    post:
+      operationId: submitPublicVisitRequest
+      tags: [public]
+      summary: Submit a walk-in visit request via public booking page
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublicVisitRequestForm"
+      responses:
+        "201":
+          description: Visit request submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicVisitRequestResponse"
+
+  /public/pass/{token}:
+    get:
+      operationId: getVisitorPass
+      tags: [public]
+      summary: Get visitor entry pass by token (for visitor to view their pass)
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Visitor pass
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitorPass"
+        "404":
+          description: Pass not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─── NOTIFICATIONS ───────────────────────────────────────────────────────────
+
+  /notifications:
+    get:
+      operationId: listNotifications
+      tags: [notifications]
+      summary: List notifications for current user
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: unreadOnly
+          in: query
+          schema:
+            type: boolean
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedNotifications"
+
+  /notifications/{notificationId}/read:
+    patch:
+      operationId: markNotificationRead
+      tags: [notifications]
+      summary: Mark a notification as read
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Notification marked as read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /notifications/mark-all-read:
+    patch:
+      operationId: markAllNotificationsRead
+      tags: [notifications]
+      summary: Mark all notifications as read
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: All marked as read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+
+  parameters:
+    orgId:
+      name: orgId
+      in: path
+      required: true
+      schema:
+        type: string
+    branchId:
+      name: branchId
+      in: path
+      required: true
+      schema:
+        type: string
+    userId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+    invitationId:
+      name: invitationId
+      in: path
+      required: true
+      schema:
+        type: string
+    visitorId:
+      name: visitorId
+      in: path
+      required: true
+      schema:
+        type: string
+    requestId:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+
+    PaginationMeta:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - total
+        - page
+        - limit
+        - totalPages
+
+    # ── Enums ──────────────────────────────────────────────────────────────────
+
+    UserRole:
+      type: string
+      enum:
+        - super_admin
+        - org_admin
+        - visitor_manager
+        - receptionist
+        - host_employee
+
+    OrgStatus:
+      type: string
+      enum:
+        - active
+        - suspended
+        - pending_setup
+        - deactivated
+
+    OrgType:
+      type: string
+      enum:
+        - government
+        - enterprise
+        - smb
+
+    SubscriptionTier:
+      type: string
+      enum:
+        - starter
+        - professional
+        - enterprise
+        - government
+
+    EntryMode:
+      type: string
+      enum:
+        - staffed
+        - unmanned
+        - hybrid
+
+    VerificationPolicy:
+      type: string
+      enum:
+        - none
+        - otp_only
+        - nafath_only
+        - otp_or_nafath
+        - nafath_required_otp_fallback
+
+    VisitRequestStatus:
+      type: string
+      enum:
+        - pending
+        - approved
+        - rejected
+        - checked_in
+        - checked_out
+        - expired
+        - cancelled
+
+    VisitRequestType:
+      type: string
+      enum:
+        - pre_registered
+        - walk_in
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    LoginResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/CurrentUser"
+        token:
+          type: string
+      required:
+        - user
+
+    CurrentUser:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        orgId:
+          type: string
+          nullable: true
+        branchId:
+          type: string
+          nullable: true
+        department:
+          type: string
+          nullable: true
+        jobTitle:
+          type: string
+          nullable: true
+        mustChangePassword:
+          type: boolean
+        setupWizardCompleted:
+          type: boolean
+        organizationName:
+          type: string
+          nullable: true
+        organizationStatus:
+          $ref: "#/components/schemas/OrgStatus"
+          nullable: true
+      required:
+        - id
+        - email
+        - name
+        - role
+        - mustChangePassword
+        - setupWizardCompleted
+
+    AcceptInvitationRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        twoFactorEnabled:
+          type: boolean
+        acceptedTerms:
+          type: boolean
+      required:
+        - token
+        - password
+        - acceptedTerms
+
+    InvitationTokenInfo:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/UserRole"
+        orgName:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+        - valid
+        - email
+        - name
+        - role
+        - orgName
+        - expiresAt
+
+    ChangePasswordRequest:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+          minLength: 8
+      required:
+        - currentPassword
+        - newPassword
+
+    # ── Organizations ─────────────────────────────────────────────────────────
+
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        logo:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        type:
+          $ref: "#/components/schemas/OrgType"
+        subscriptionTier:
+          $ref: "#/components/schemas/SubscriptionTier"
+        publicBookingSlug:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/OrgStatus"
+        verificationPolicy:
+          $ref: "#/components/schemas/VerificationPolicy"
+        nafathEnabled:
+          type: boolean
+        otpEnabled:
+          type: boolean
+        verificationBypassForTrusted:
+          type: boolean
+        maxUsers:
+          type: integer
+        maxBranches:
+          type: integer
+        telegramChatId:
+          type: string
+          nullable: true
+        primaryContactName:
+          type: string
+          nullable: true
+        primaryContactEmail:
+          type: string
+          nullable: true
+        primaryContactPhone:
+          type: string
+          nullable: true
+        contractStartDate:
+          type: string
+          format: date
+          nullable: true
+        contractEndDate:
+          type: string
+          format: date
+          nullable: true
+        suspensionReason:
+          type: string
+          nullable: true
+        setupWizardCompleted:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - type
+        - subscriptionTier
+        - status
+        - verificationPolicy
+        - nafathEnabled
+        - otpEnabled
+        - verificationBypassForTrusted
+        - maxUsers
+        - maxBranches
+        - setupWizardCompleted
+        - createdAt
+        - updatedAt
+
+    CreateOrganizationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        type:
+          $ref: "#/components/schemas/OrgType"
+        address:
+          type: string
+          nullable: true
+        subscriptionTier:
+          $ref: "#/components/schemas/SubscriptionTier"
+        maxUsers:
+          type: integer
+        maxBranches:
+          type: integer
+        contractStartDate:
+          type: string
+          format: date
+          nullable: true
+        contractEndDate:
+          type: string
+          format: date
+          nullable: true
+        primaryContactName:
+          type: string
+          nullable: true
+        primaryContactEmail:
+          type: string
+          nullable: true
+        primaryContactPhone:
+          type: string
+          nullable: true
+        firstAdminName:
+          type: string
+        firstAdminEmail:
+          type: string
+          format: email
+        firstAdminPhone:
+          type: string
+          nullable: true
+      required:
+        - name
+        - type
+        - subscriptionTier
+        - maxUsers
+        - maxBranches
+        - firstAdminName
+        - firstAdminEmail
+
+    UpdateOrganizationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        logo:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        publicBookingSlug:
+          type: string
+          nullable: true
+        verificationPolicy:
+          $ref: "#/components/schemas/VerificationPolicy"
+        nafathEnabled:
+          type: boolean
+        otpEnabled:
+          type: boolean
+        verificationBypassForTrusted:
+          type: boolean
+        telegramChatId:
+          type: string
+          nullable: true
+        primaryContactName:
+          type: string
+          nullable: true
+        primaryContactEmail:
+          type: string
+          nullable: true
+        primaryContactPhone:
+          type: string
+          nullable: true
+        setupWizardCompleted:
+          type: boolean
+
+    UpdateOrgStatusRequest:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/OrgStatus"
+        reason:
+          type: string
+          nullable: true
+      required:
+        - status
+
+    OrgStats:
+      type: object
+      properties:
+        totalVisitorsThisMonth:
+          type: integer
+        totalRequestsThisMonth:
+          type: integer
+        approvalRate:
+          type: number
+        activeUsers:
+          type: integer
+        totalUsers:
+          type: integer
+        activeBranches:
+          type: integer
+        totalBranches:
+          type: integer
+        visitorsToday:
+          type: integer
+        pendingApprovals:
+          type: integer
+        checkedInNow:
+          type: integer
+      required:
+        - totalVisitorsThisMonth
+        - totalRequestsThisMonth
+        - approvalRate
+        - activeUsers
+        - totalUsers
+        - activeBranches
+        - totalBranches
+        - visitorsToday
+        - pendingApprovals
+        - checkedInNow
+
+    PaginatedOrganizations:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Organization"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required:
+        - data
+        - meta
+
+    # ── Branches ──────────────────────────────────────────────────────────────
+
+    Branch:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        branchCode:
+          type: string
+        entryMode:
+          $ref: "#/components/schemas/EntryMode"
+        verificationPolicyOverride:
+          $ref: "#/components/schemas/VerificationPolicy"
+          nullable: true
+        isActive:
+          type: boolean
+        maxConcurrentVisitors:
+          type: integer
+          nullable: true
+        workingHoursOverride:
+          type: object
+          nullable: true
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - orgId
+        - name
+        - branchCode
+        - entryMode
+        - isActive
+        - createdAt
+
+    CreateBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        branchCode:
+          type: string
+        entryMode:
+          $ref: "#/components/schemas/EntryMode"
+        maxConcurrentVisitors:
+          type: integer
+          nullable: true
+      required:
+        - name
+        - branchCode
+        - entryMode
+
+    UpdateBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        entryMode:
+          $ref: "#/components/schemas/EntryMode"
+        verificationPolicyOverride:
+          $ref: "#/components/schemas/VerificationPolicy"
+          nullable: true
+        maxConcurrentVisitors:
+          type: integer
+          nullable: true
+        isActive:
+          type: boolean
+
+    # ── Users ─────────────────────────────────────────────────────────────────
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        branchId:
+          type: string
+          nullable: true
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        department:
+          type: string
+          nullable: true
+        jobTitle:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        isLocked:
+          type: boolean
+        twoFactorEnabled:
+          type: boolean
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - orgId
+        - name
+        - email
+        - role
+        - isActive
+        - isLocked
+        - twoFactorEnabled
+        - createdAt
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        branchId:
+          type: string
+          nullable: true
+        department:
+          type: string
+          nullable: true
+        jobTitle:
+          type: string
+          nullable: true
+
+    PaginatedUsers:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required:
+        - data
+        - meta
+
+    # ── Invitations ───────────────────────────────────────────────────────────
+
+    Invitation:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        branchId:
+          type: string
+          nullable: true
+        invitedById:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        department:
+          type: string
+          nullable: true
+        jobTitle:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, accepted, expired, revoked]
+        tokenExpiresAt:
+          type: string
+          format: date-time
+        sentAt:
+          type: string
+          format: date-time
+        acceptedAt:
+          type: string
+          format: date-time
+          nullable: true
+        resendCount:
+          type: integer
+      required:
+        - id
+        - orgId
+        - invitedById
+        - email
+        - name
+        - role
+        - status
+        - tokenExpiresAt
+        - sentAt
+        - resendCount
+
+    CreateInvitationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        branchId:
+          type: string
+          nullable: true
+        department:
+          type: string
+          nullable: true
+        jobTitle:
+          type: string
+          nullable: true
+      required:
+        - name
+        - email
+        - role
+
+    # ── Visitors ──────────────────────────────────────────────────────────────
+
+    Visitor:
+      type: object
+      properties:
+        id:
+          type: string
+        nationalIdNumber:
+          type: string
+          nullable: true
+        fullName:
+          type: string
+        fullNameAr:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        companyName:
+          type: string
+          nullable: true
+        photoUrl:
+          type: string
+          nullable: true
+        isBlacklisted:
+          type: boolean
+        verificationStatus:
+          type: string
+          enum:
+            - pending
+            - verified_otp
+            - verified_nafath
+            - verified_both
+            - skipped_trusted
+            - unverified
+        lastVerifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - fullName
+        - isBlacklisted
+        - verificationStatus
+        - createdAt
+
+    VisitorDetail:
+      allOf:
+        - $ref: "#/components/schemas/Visitor"
+        - type: object
+          properties:
+            visitHistory:
+              type: array
+              items:
+                $ref: "#/components/schemas/VisitRequest"
+          required:
+            - visitHistory
+
+    PaginatedVisitors:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Visitor"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required:
+        - data
+        - meta
+
+    # ── Visit Requests ────────────────────────────────────────────────────────
+
+    VisitRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        branchId:
+          type: string
+        visitorId:
+          type: string
+        hostUserId:
+          type: string
+          nullable: true
+        purpose:
+          type: string
+        purposeAr:
+          type: string
+          nullable: true
+        type:
+          $ref: "#/components/schemas/VisitRequestType"
+        status:
+          $ref: "#/components/schemas/VisitRequestStatus"
+        scheduledDate:
+          type: string
+          format: date
+        scheduledTimeFrom:
+          type: string
+          nullable: true
+        scheduledTimeTo:
+          type: string
+          nullable: true
+        qrExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        checkInTime:
+          type: string
+          format: date-time
+          nullable: true
+        checkOutTime:
+          type: string
+          format: date-time
+          nullable: true
+        approvalMethod:
+          type: string
+          enum: [web, telegram]
+          nullable: true
+        approvedById:
+          type: string
+          nullable: true
+        approvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        visitor:
+          $ref: "#/components/schemas/Visitor"
+          nullable: true
+        hostUser:
+          $ref: "#/components/schemas/UserSummary"
+          nullable: true
+        branch:
+          $ref: "#/components/schemas/BranchSummary"
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - orgId
+        - branchId
+        - visitorId
+        - purpose
+        - type
+        - status
+        - scheduledDate
+        - createdAt
+
+    CreateVisitRequestRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+        visitorName:
+          type: string
+        visitorNameAr:
+          type: string
+          nullable: true
+        visitorNationalId:
+          type: string
+          nullable: true
+        visitorPhone:
+          type: string
+          nullable: true
+        visitorEmail:
+          type: string
+          nullable: true
+        visitorCompany:
+          type: string
+          nullable: true
+        purpose:
+          type: string
+        purposeAr:
+          type: string
+          nullable: true
+        scheduledDate:
+          type: string
+          format: date
+        scheduledTimeFrom:
+          type: string
+          nullable: true
+        scheduledTimeTo:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required:
+        - branchId
+        - visitorName
+        - purpose
+        - scheduledDate
+
+    ApproveRejectRequest:
+      type: object
+      properties:
+        notes:
+          type: string
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+
+    ScanQrRequest:
+      type: object
+      properties:
+        qrCode:
+          type: string
+      required:
+        - qrCode
+
+    BatchActionRequest:
+      type: object
+      properties:
+        requestIds:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+          nullable: true
+      required:
+        - requestIds
+
+    BatchActionResponse:
+      type: object
+      properties:
+        processed:
+          type: integer
+        failed:
+          type: integer
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              requestId:
+                type: string
+              success:
+                type: boolean
+              error:
+                type: string
+                nullable: true
+            required:
+              - requestId
+              - success
+      required:
+        - processed
+        - failed
+        - results
+
+    PaginatedVisitRequests:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitRequest"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required:
+        - data
+        - meta
+
+    # ── Blacklist ─────────────────────────────────────────────────────────────
+
+    BlacklistEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        visitorId:
+          type: string
+        visitor:
+          $ref: "#/components/schemas/Visitor"
+          nullable: true
+        reason:
+          type: string
+        blacklistedById:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - orgId
+        - visitorId
+        - reason
+        - blacklistedById
+        - createdAt
+
+    AddToBlacklistRequest:
+      type: object
+      properties:
+        visitorId:
+          type: string
+        reason:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - visitorId
+        - reason
+
+    PaginatedBlacklist:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlacklistEntry"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required:
+        - data
+        - meta
+
+    # ── Dashboard ─────────────────────────────────────────────────────────────
+
+    SuperAdminDashboard:
+      type: object
+      properties:
+        totalOrgs:
+          type: integer
+        activeOrgs:
+          type: integer
+        suspendedOrgs:
+          type: integer
+        pendingSetupOrgs:
+          type: integer
+        totalVisitorsToday:
+          type: integer
+        totalRequestsToday:
+          type: integer
+        orgsByTier:
+          type: array
+          items:
+            type: object
+            properties:
+              tier:
+                type: string
+              count:
+                type: integer
+            required:
+              - tier
+              - count
+        recentOrgs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Organization"
+        monthlyGrowth:
+          type: array
+          items:
+            type: object
+            properties:
+              month:
+                type: string
+              newOrgs:
+                type: integer
+              totalVisitors:
+                type: integer
+            required:
+              - month
+              - newOrgs
+              - totalVisitors
+      required:
+        - totalOrgs
+        - activeOrgs
+        - suspendedOrgs
+        - pendingSetupOrgs
+        - totalVisitorsToday
+        - totalRequestsToday
+        - orgsByTier
+        - recentOrgs
+        - monthlyGrowth
+
+    OrgDashboard:
+      type: object
+      properties:
+        visitorsToday:
+          type: integer
+        pendingApprovals:
+          type: integer
+        checkedInNow:
+          type: integer
+        weeklyTrend:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              count:
+                type: integer
+            required:
+              - date
+              - count
+        branchComparison:
+          type: array
+          items:
+            type: object
+            properties:
+              branchName:
+                type: string
+              visitorsToday:
+                type: integer
+              pendingApprovals:
+                type: integer
+            required:
+              - branchName
+              - visitorsToday
+              - pendingApprovals
+        recentRequests:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitRequest"
+      required:
+        - visitorsToday
+        - pendingApprovals
+        - checkedInNow
+        - weeklyTrend
+        - branchComparison
+        - recentRequests
+
+    BranchDashboard:
+      type: object
+      properties:
+        expectedVisitorsToday:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitRequest"
+        pendingRequests:
+          type: integer
+        checkedInNow:
+          type: integer
+        overstayAlerts:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitRequest"
+      required:
+        - expectedVisitorsToday
+        - pendingRequests
+        - checkedInNow
+        - overstayAlerts
+
+    HostDashboard:
+      type: object
+      properties:
+        upcomingVisitors:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitRequest"
+        pastVisitors:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisitRequest"
+        totalVisitorsThisMonth:
+          type: integer
+      required:
+        - upcomingVisitors
+        - pastVisitors
+        - totalVisitorsThisMonth
+
+    # ── Audit Logs ────────────────────────────────────────────────────────────
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+          nullable: true
+        userId:
+          type: string
+          nullable: true
+        userName:
+          type: string
+          nullable: true
+        action:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: string
+          nullable: true
+        details:
+          type: object
+          nullable: true
+          additionalProperties: true
+        ipAddress:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - id
+        - action
+        - entityType
+        - timestamp
+
+    PaginatedAuditLogs:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required:
+        - data
+        - meta
+
+    # ── Reports ───────────────────────────────────────────────────────────────
+
+    VisitorTrafficReport:
+      type: object
+      properties:
+        period:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              totalVisitors:
+                type: integer
+              checkedIn:
+                type: integer
+              checkedOut:
+                type: integer
+              walkIns:
+                type: integer
+              preRegistered:
+                type: integer
+            required:
+              - label
+              - totalVisitors
+              - checkedIn
+              - checkedOut
+              - walkIns
+              - preRegistered
+        summary:
+          type: object
+          properties:
+            totalVisitors:
+              type: integer
+            avgDuration:
+              type: number
+            approvalRate:
+              type: number
+            peakHour:
+              type: string
+          required:
+            - totalVisitors
+            - avgDuration
+            - approvalRate
+            - peakHour
+      required:
+        - period
+        - data
+        - summary
+
+    # ── Public ────────────────────────────────────────────────────────────────
+
+    PublicOrgInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        logo:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        branches:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              nameAr:
+                type: string
+                nullable: true
+            required:
+              - id
+              - name
+      required:
+        - id
+        - name
+        - branches
+
+    PublicVisitRequestForm:
+      type: object
+      properties:
+        visitorName:
+          type: string
+        visitorNameAr:
+          type: string
+          nullable: true
+        nationalId:
+          type: string
+          nullable: true
+        phone:
+          type: string
+        email:
+          type: string
+          nullable: true
+        companyName:
+          type: string
+          nullable: true
+        branchId:
+          type: string
+        purpose:
+          type: string
+        scheduledDate:
+          type: string
+          format: date
+        scheduledTimeFrom:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required:
+        - visitorName
+        - phone
+        - branchId
+        - purpose
+        - scheduledDate
+
+    PublicVisitRequestResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          $ref: "#/components/schemas/VisitRequestStatus"
+        message:
+          type: string
+        trackingToken:
+          type: string
+      required:
+        - id
+        - status
+        - message
+        - trackingToken
+
+    VisitorPass:
+      type: object
+      properties:
+        requestId:
+          type: string
+        visitorName:
+          type: string
+        hostName:
+          type: string
+          nullable: true
+        orgName:
+          type: string
+        orgLogo:
+          type: string
+          nullable: true
+        branchName:
+          type: string
+        scheduledDate:
+          type: string
+        scheduledTimeFrom:
+          type: string
+          nullable: true
+        scheduledTimeTo:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/VisitRequestStatus"
+        qrCodeData:
+          type: string
+          nullable: true
+        purpose:
+          type: string
+      required:
+        - requestId
+        - visitorName
+        - orgName
+        - branchName
+        - scheduledDate
+        - status
+        - purpose
+
+    # ── Notifications ─────────────────────────────────────────────────────────
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        type:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+        isRead:
+          type: boolean
+        relatedEntityType:
+          type: string
+          nullable: true
+        relatedEntityId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - type
+        - title
+        - message
+        - isRead
+        - createdAt
+
+    PaginatedNotifications:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+        unreadCount:
+          type: integer
+      required:
+        - data
+        - meta
+        - unreadCount
+
+    # ── Summary types ─────────────────────────────────────────────────────────
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          $ref: "#/components/schemas/UserRole"
+      required:
+        - id
+        - name
+        - email
+        - role
+
+    BranchSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        branchCode:
+          type: string
+      required:
+        - id
+        - name
+        - branchCode

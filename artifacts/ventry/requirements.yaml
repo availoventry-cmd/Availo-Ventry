@@ -1,0 +1,22 @@
+packages:
+  "framer-motion": "Page transitions and smooth interactive animations"
+  "recharts": "Dashboard analytics charts and data visualization"
+  "qrcode.react": "QR code generation for visitor passes"
+  "date-fns": "Human-readable date formatting and manipulation"
+  "react-hook-form": "Form state management"
+  "@hookform/resolvers": "Zod resolver for form validation"
+  "zod": "Schema validation for forms"
+  "lucide-react": "Icons"
+
+images:
+  - path: "artifacts/ventry/public/images/auth-bg.png"
+    description: "Abstract modern professional architectural building glass facade with deep blue sky, clean and trustworthy, corporate style"
+    aspect_ratio: "16:9"
+  - path: "artifacts/ventry/public/images/logo-mark.png"
+    description: "Minimal geometric logo mark representing a smart gateway or secure portal, deep blue and soft gold colors, transparent background"
+    aspect_ratio: "1:1"
+
+notes:
+  - Using generated Orval React Query hooks from @workspace/api-client-react
+  - Routing managed by wouter
+  - Role-based access control implemented via AuthContext wrapper

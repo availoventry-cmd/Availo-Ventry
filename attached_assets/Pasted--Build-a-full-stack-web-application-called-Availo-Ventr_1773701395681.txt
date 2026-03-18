@@ -1,0 +1,1430 @@
+
+```
+Build a full-stack web application called "Availo Ventry" — a smart visitor management platform for government entities, enterprises, and SMBs. It is an extension product of "Availo" (an employee attendance system by T2 — t2.sa). Ventry = Visit + Entry.
+
+## TECH STACK
+- Frontend: Next.js 14 (App Router) with TypeScript, Tailwind CSS, shadcn/ui
+- Backend: Next.js API routes + Prisma ORM
+- Database: PostgreSQL
+- Auth: Role-based with hierarchy (Super Admin → Org Admin → Visitor Manager → Receptionist → Host Employee → Visitor)
+- User onboarding: Super Admin creates org + first Org Admin → Org Admin invites internal users → role-specific access
+- Language: Bilingual — Arabic (RTL) and English (LTR) with next-intl
+- Real-time: Server-Sent Events or WebSockets for live notifications
+
+## CORE CONCEPT
+Two visitor registration flows:
+
+### Flow 1: Pre-Registered Visitors (Host-Initiated)
+1. An employee (host) logs into the portal and creates a "Visit Request" with a visitor list (name, ID number, phone, purpose, expected date/time).
+2. System sends the visitor an SMS/email with a unique QR code or one-time entry pass.
+3. When the visitor arrives at reception, the receptionist scans the QR code.
+4. System verifies: (a) visitor identity matches, (b) visit is within the valid time window, (c) QR has not been used before (one-time use).
+5. Visitor is checked in. Host receives a notification that their guest has arrived.
+6. On departure, receptionist checks the visitor out. Pass is invalidated.
+
+### Flow 2: Walk-In / Visitor-Initiated Request
+1. Visitor approaches a self-service kiosk or visits a public booking page (unique URL per organization).
+2. Visitor fills in: name, ID number, phone, purpose, department/person to visit, preferred date/time.
+3. Request enters a queue visible to the Visitor Management team.
+4. The request can be approved/rejected via:
+   - The web portal (dashboard queue with approve/reject buttons)
+   - A Telegram bot (sends request summary → inline buttons: ✅ Approve / ❌ Reject)
+5. On approval, visitor receives a QR-based entry pass (SMS/email).
+6. Same check-in/check-out flow as Flow 1.
+
+## DATA MODEL (Key Entities)
+
+### Organizations
+- id, name, name_ar, logo, address, type (government/enterprise/SMB), subscription_tier
+- public_booking_url (slug), settings (max_visitors_per_day, auto_approve, working_hours)
+- telegram_chat_id (for bot integration)
+- verification_policy: (none | otp_only | nafath_only | otp_or_nafath | nafath_required_otp_fallback)
+- nafath_required_for: JSON array of contexts — e.g., ["walk_in", "first_visit", "all"] (configurable per org)
+- nafath_enabled: boolean (whether the org has activated Nafath integration)
+- otp_enabled: boolean (default true)
+- verification_bypass_for_trusted: boolean (skip verification for Trusted visitors)
+- status: (active | suspended | pending_setup | deactivated)
+- created_by: super_admin user_id (who onboarded this org)
+- created_at, updated_at, activated_at, suspended_at
+- suspension_reason, max_users (license limit), max_branches
+- contract_start_date, contract_end_date
+- primary_contact_name, primary_contact_email, primary_contact_phone
+
+### Branches (sub-locations within an organization)
+- id, org_id, name, name_ar, address, city
+- branch_code (unique per org, e.g., "RUH-HQ", "JED-01")
+- entry_mode: (staffed | unmanned | hybrid)
+- verification_policy_override: (null = inherit from org | own policy)
+- is_active, created_at
+- max_concurrent_visitors, working_hours_override (JSON)
+
+### Users (Internal)
+- id, org_id, branch_id (nullable — null means access to all branches)
+- name, name_ar, email, phone, national_id (optional, for internal audit)
+- role: (super_admin | org_admin | visitor_manager | receptionist | host_employee)
+- department, job_title
+- is_active, is_locked, lock_reason
+- invited_by: user_id (who invited this user)
+- invitation_accepted_at
+- telegram_user_id, telegram_linked_at
+- last_login_at, last_active_at, login_count
+- password_hash, password_changed_at, must_change_password: boolean
+- two_factor_enabled: boolean, two_factor_method: (sms | authenticator_app | nafath)
+- created_at, updated_at, deactivated_at, deactivated_by
+
+### User Invitations
+- id, org_id, branch_id (nullable)
+- invited_by: user_id
+- email, phone, name, name_ar
+- role: (org_admin | visitor_manager | receptionist | host_employee)
+- department, job_title
+- invitation_token (unique, secure random), token_expires_at
+- status: (pending | accepted | expired | revoked)
+- sent_at, accepted_at, revoked_at, revoked_by
+- resend_count, last_resent_at
+
+## ROLE HIERARCHY & ADMINISTRATION FLOW
+
+### Role Definitions & Permissions
+
+**1. Super Admin (T2 Platform Level)**
+- WHO: T2 staff only. This is NOT per-organization — it's a platform-wide role.
+- SCOPE: Access to ALL organizations across the entire Ventry platform.
+- CAN DO:
+  - Create new organizations (onboard a new client)
+  - Set organization subscription tier, license limits (max users, max branches), contract dates
+  - Create the FIRST Org Admin user for each organization (initial setup)
+  - Activate, suspend, or deactivate organizations
+  - View platform-wide analytics (total orgs, total visitors, total requests across all clients)
+  - View audit logs across all organizations (for compliance/support)
+  - Monitor system health: API response times, Nafath/OTP success rates, error rates
+  - Manage platform settings: global rate limits, default verification policies, SMS/OTP provider config
+  - Impersonate an Org Admin (support mode — view their dashboard AS them for troubleshooting, with audit trail)
+  - Receive platform-wide anomaly alerts (10x traffic spike, new org flooding, etc.)
+- CANNOT DO:
+  - Approve/reject visit requests (that's org-level)
+  - Check in visitors
+  - See visitor PII (national IDs) unless explicitly accessing audit logs for compliance
+  - Delete organizations permanently (only deactivate — data retention for PDPL)
+
+**2. Org Admin (Organization Level)**
+- WHO: The highest authority WITHIN an organization. Created by Super Admin during onboarding.
+- SCOPE: Full control of their own organization only. Cannot see other orgs.
+- CAN DO:
+  - Complete the organization setup: profile, branding, logo, working hours
+  - Manage branches (create, edit, deactivate branch locations)
+  - Invite and manage ALL user roles within their org (Org Admin, Visitor Manager, Receptionist, Host Employee)
+  - Assign users to specific branches or grant access to all branches
+  - Set verification policy (Nafath/OTP settings)
+  - Set entry mode per branch (staffed/unmanned)
+  - Configure all org settings: auto-approve rules, daily caps, flood protection thresholds
+  - View and export all reports and analytics for their org
+  - Manage blacklist
+  - View full audit log for their org
+  - Configure Telegram bot integration
+  - Set notification preferences per role
+  - Activate/deactivate users, reset passwords, force password change
+  - Manage visitor pass templates and branding
+  - Emergency: trigger evacuation mode, remote gate lockdown
+- CANNOT DO:
+  - See other organizations' data
+  - Change their own subscription tier (that's Super Admin)
+  - Access platform-wide settings
+
+**3. Visitor Manager (Organization Level — NEW ROLE)**
+- WHO: Staff responsible for managing the visitor approval queue. May also be called "Front Office Manager" or "Security Coordinator."
+- SCOPE: Their assigned branch(es) within the org.
+- CAN DO:
+  - View and manage the visit request queue (approve, reject, reschedule)
+  - Approve/reject requests via web portal AND Telegram bot
+  - View visitor directory and profiles
+  - Manage blacklist (add/remove visitors)
+  - View reports for their branch(es)
+  - Manage walk-in visitor registration
+  - Receive daily digests and pending request notifications
+  - View check-in/check-out activity
+- CANNOT DO:
+  - Invite or manage users (that's Org Admin)
+  - Change org settings, verification policy, or entry mode
+  - View audit logs or other branches (unless granted multi-branch access)
+  - Access billing, subscription, or platform settings
+
+**4. Receptionist (Branch Level)**
+- WHO: Front desk staff who physically check visitors in and out.
+- SCOPE: Their assigned branch only.
+- CAN DO:
+  - Scan QR codes and check visitors in/out
+  - Search visitors by name, ID, or QR
+  - View today's expected visitor list for their branch
+  - Verify visitor identity (trigger OTP, visual Nafath check)
+  - Print visitor badges
+  - Flag overstay visitors
+  - Register walk-in visitors (sends to approval queue)
+  - View currently checked-in visitors list
+- CANNOT DO:
+  - Approve or reject visit requests
+  - View reports or analytics
+  - Manage blacklist
+  - Manage users or settings
+  - Access other branches
+
+**5. Host Employee (Branch Level)**
+- WHO: Any internal employee who invites visitors.
+- SCOPE: Their own visitors only. Cannot see other employees' visitors.
+- CAN DO:
+  - Create visit requests for their own visitors (pre-register a visitor)
+  - View their own upcoming and past visitors
+  - Receive notifications (visitor arrived, visitor checked out)
+  - Cancel their own visit requests
+  - Bulk import visitors for their own meetings/events
+- CANNOT DO:
+  - Approve or reject requests (even their own — approval is by Visitor Manager or Org Admin)
+  - Check in visitors
+  - View other employees' visitors
+  - Access settings, reports, blacklist, or user management
+
+**6. Visitor (External — no portal login)**
+- WHO: External person visiting the organization.
+- SCOPE: Their own visit only. Interacts via public pages, SMS links, and kiosk.
+- CAN DO:
+  - Submit a visit request via public booking page
+  - View their own entry pass / QR code via the SMS link
+  - Self-check-in via phone link (if unmanned entry enabled)
+  - Verify identity via OTP or Nafath
+  - View status of their own request (pending/approved/rejected)
+- CANNOT DO:
+  - Log into the portal
+  - See any internal data
+  - See other visitors
+
+### Super Admin → Organization Onboarding Flow
+```
+Step 1: Super Admin logs into the T2 Platform Admin Portal
+        ↓
+Step 2: Super Admin clicks "Create Organization"
+        - Fills in: org name (AR + EN), type (govt/enterprise/SMB), address
+        - Sets: subscription tier, max users, max branches, contract dates
+        - Uploads: org logo (optional, can be done later by Org Admin)
+        ↓
+Step 3: Super Admin creates the FIRST Org Admin user
+        - Fills in: name, email, phone
+        - System generates a secure invitation link (valid 72 hours)
+        - System sends invitation email + SMS to the new Org Admin:
+          "You have been invited as Admin for [Org Name] on Availo Ventry.
+           Click here to set up your account: [link]"
+        ↓
+Step 4: Org Admin clicks the invitation link
+        - Sets their password (must meet complexity: 8+ chars, uppercase, number, special)
+        - Enables two-factor authentication (mandatory for Org Admin role)
+        - Accepts Terms of Service
+        ↓
+Step 5: Org Admin lands on the "Organization Setup Wizard"
+        - Step 5a: Complete org profile (branding, logo, working hours)
+        - Step 5b: Set verification policy (Nafath/OTP settings)
+        - Step 5c: Create first branch (name, address, entry mode)
+        - Step 5d: Invite first users (at least 1 Visitor Manager or Receptionist)
+        - Step 5e: Configure Telegram bot (optional, can skip)
+        ↓
+Step 6: Organization is ACTIVE — ready to receive visitors
+```
+
+### Org Admin → User Invitation Flow
+```
+Step 1: Org Admin goes to Settings → User Management
+        ↓
+Step 2: Clicks "Invite User"
+        - Fills in: name, email, phone
+        - Selects role: Org Admin / Visitor Manager / Receptionist / Host Employee
+        - Assigns branch: [specific branch] or [All Branches]
+        - Optionally sets: department, job title
+        ↓
+Step 3: System generates invitation (token + link, valid 72 hours)
+        - Sends email: "You've been invited to [Org Name] as [Role]. Click to join: [link]"
+        - Sends SMS: "You've been invited to Availo Ventry. Check your email."
+        ↓
+Step 4: Invited user clicks link
+        - Sets password
+        - Enables 2FA (mandatory for Org Admin & Visitor Manager, optional for others)
+        - Accepts Terms of Service
+        ↓
+Step 5: User account is ACTIVE
+        - Redirected to their role-specific dashboard
+        - Org Admin sees them in the User Management list as "Active"
+        
+If invitation expires (72 hours):
+        - Org Admin sees the invitation as "Expired" in User Management
+        - Can click "Resend" to generate a new token + link (max 3 resends)
+        
+If Org Admin needs to revoke access:
+        - Deactivate user (soft delete — user can't log in, data preserved)
+        - Or revoke pending invitation before it's accepted
+```
+
+### Permission Matrix (Page/Feature Access by Role)
+
+| Feature / Page | Super Admin | Org Admin | Visitor Mgr | Receptionist | Host Employee |
+|---|---|---|---|---|---|
+| **Platform Admin Portal** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Create Organization** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Create First Org Admin** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Platform Analytics** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Impersonate Org Admin** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Org Setup Wizard** | ❌ | ✅ (first login) | ❌ | ❌ | ❌ |
+| **Org Settings & Branding** | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Branch Management** | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **User Management (invite/deactivate)** | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Verification Policy** | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Telegram Bot Config** | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Evacuation / Lockdown** | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Visit Request Queue** | ❌ | ✅ (all) | ✅ (branch) | ❌ | ❌ |
+| **Approve/Reject Requests** | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Approve via Telegram** | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Visitor Directory** | ❌ | ✅ (all) | ✅ (branch) | 🔍 (search only) | ❌ |
+| **Blacklist Management** | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Check-In / Check-Out** | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **QR Scanner** | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **Print Badges** | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **Create Visit Request** | ❌ | ✅ | ✅ | ❌ | ✅ (own only) |
+| **View Visit Requests** | ❌ | ✅ (all) | ✅ (branch) | ✅ (today, branch) | ✅ (own only) |
+| **Bulk Import Visitors** | ❌ | ✅ | ✅ | ❌ | ✅ (own meetings) |
+| **Reports & Analytics** | ✅ (platform) | ✅ (org) | ✅ (branch) | ❌ | ❌ |
+| **Audit Log** | ✅ (all orgs) | ✅ (own org) | ❌ | ❌ | ❌ |
+| **Dashboard** | ✅ (platform) | ✅ (org) | ✅ (branch) | ✅ (today queue) | ✅ (my visitors) |
+
+### Visitors
+- id, national_id_number, full_name, full_name_ar, phone, email, company_name
+- photo_url, is_blacklisted, blacklist_reason, created_at
+- verification_status (pending, verified_otp, verified_nafath, verified_both, skipped_trusted)
+- nafath_verified_at, nafath_transaction_id, nafath_confidence_level
+- otp_verified_at, otp_phone_used
+- last_verification_method, last_verified_at
+
+### Visit Requests
+- id, org_id, branch_id, visitor_id, host_user_id, purpose, purpose_ar
+- type (pre_registered | walk_in)
+- status (pending, approved, rejected, checked_in, checked_out, expired, cancelled)
+- scheduled_date, scheduled_time_from, scheduled_time_to
+- qr_code (unique, one-time), qr_expires_at
+- check_in_time, check_out_time, checked_in_by (receptionist user_id)
+- approval_method (web | telegram), approved_by, approved_at
+- rejection_reason, notes
+
+### Visitor Badges
+- id, visit_request_id, badge_number, zone_access (JSON array of allowed zones)
+- issued_at, returned_at
+
+### Blacklist
+- id, org_id, visitor_id, reason, blacklisted_by, created_at, expires_at
+
+### Audit Log
+- id, org_id, user_id, action, entity_type, entity_id, details (JSON), ip_address, timestamp
+
+### Reminders
+- id, visit_request_id, type (visitor_arrival | host_preparation | checkout_overdue | pass_expiring)
+- channel (sms | email | telegram | in_app), scheduled_at, sent_at, status
+
+## PAGES & FEATURES
+
+### 1. Dashboard (Role-Based)
+- **Super Admin (T2)**: Total organizations (active/suspended/pending), total visitors platform-wide today, total requests today, system health (API uptime, Nafath success rate, avg response time), organizations by tier (pie chart), growth chart (new orgs + visitors over months), flagged anomalies, recent org onboardings
+- **Org Admin**: Today's visitors count (all branches), pending approvals, checked-in now, weekly/monthly trends chart, top visiting companies, peak hours heatmap, user activity (who's online, last active), branch comparison (visitors per branch)
+- **Visitor Manager**: Pending requests needing action (with urgency badges), today's expected visitors for their branch(es), approval rate this week, average response time to approve, requests approaching expiry
+- **Receptionist**: Live queue of expected visitors today (sorted by time), quick check-in/check-out, search visitor by name/ID/QR, currently checked-in count, overstay alerts
+- **Host Employee**: My upcoming visitors, create new visit request, visitor arrival notifications, my request history
+
+### 2. Super Admin — Platform Management Pages
+
+**2a. Organization Management (/admin/organizations)**
+- Table of ALL organizations: name, type, tier, status (active/suspended/pending), users count, visitors this month, created date
+- Filters: by status, by type, by tier, by date range
+- Actions: Create New Org, View Details, Suspend, Reactivate, Deactivate
+- Organization detail page:
+  - Profile info, contract dates, license usage (users: 12/20, branches: 3/5)
+  - Activity summary: visitors this month, requests this month, approval rate
+  - User list within this org (view-only, for support)
+  - Audit log (filtered to this org)
+  - "Impersonate Org Admin" button (opens their dashboard in a special support mode with a visible banner: "⚠ Viewing as [Org Name] — Support Mode")
+
+**2b. Organization Onboarding Wizard (/admin/organizations/new)**
+- Step 1: Organization details (name AR/EN, type, address, primary contact)
+- Step 2: Subscription (tier, max users, max branches, contract start/end)
+- Step 3: Create First Org Admin (name, email, phone → sends invitation)
+- Step 4: Review & Activate
+- After creation: org status = "pending_setup" until Org Admin completes setup wizard
+
+**2c. Platform Analytics (/admin/analytics)**
+- Total organizations over time (line chart)
+- Total visitors across all orgs (bar chart by month)
+- Visitor requests by status breakdown (platform-wide)
+- Verification method distribution: Nafath vs OTP vs None (platform-wide)
+- System performance: API response times, Nafath API success rate, SMS delivery rate
+- Top organizations by visitor volume
+- Anomaly alerts: orgs with unusual spikes, failed verification clusters
+
+**2d. Platform Settings (/admin/settings)**
+- Global default verification policy (applied to new orgs)
+- Global rate limits (per-org defaults)
+- SMS/OTP provider configuration (Authentica.sa API keys, Twilio fallback)
+- Nafath API global credentials (if shared across orgs)
+- System email templates (invitation emails, platform alerts)
+- Maintenance mode toggle (blocks all non-super-admin access with a custom message)
+
+### 3. Org Admin — User Management Pages
+
+**3a. User Management (/portal/settings/users)**
+- Table of all users in org: name, email, role, branch, status (active/invited/deactivated), last login
+- Filters: by role, by branch, by status
+- Actions per user: View Profile, Edit Role/Branch, Deactivate, Reactivate, Reset Password, Force Password Change, Resend Invitation
+- Role badge next to each name with color coding
+
+**3b. Invite User Modal/Page**
+- Form: name, name_ar (optional), email, phone
+- Role selector: Org Admin / Visitor Manager / Receptionist / Host Employee (with description of what each can do)
+- Branch assignment: specific branch or "All Branches"
+- Department & job title (optional)
+- Preview: "This will send an invitation to [email] to join [Org Name] as a [Role]"
+- Submit → generates invitation → sends email + SMS
+
+**3c. Branch Management (/portal/settings/branches)**
+- List of all branches: name, code, address, entry mode, active users, today's visitors
+- Create new branch: name (AR/EN), address, branch code, entry mode (staffed/unmanned/hybrid)
+- Edit branch: change settings, override verification policy, set working hours
+- Deactivate branch: soft-delete, all users reassigned or deactivated
+
+**3d. Organization Setup Wizard (first login only)**
+- Shown only when Org Admin first accepts their invitation and logs in
+- Step 1: Complete org profile (upload logo, set branding colors, working hours, holidays)
+- Step 2: Verification policy (choose Nafath/OTP settings — see Verification section)
+- Step 3: Create first branch (name, address, entry mode)
+- Step 4: Invite first team members (at least 1 Visitor Manager or Receptionist recommended)
+- Step 5: Optional — set up Telegram bot
+- Step 6: Review & Go Live → org status changes from "pending_setup" to "active"
+- Wizard can be skipped and returned to later, but a setup progress bar shows in the header until complete
+
+### 4. Visitor Management
+- Visitor directory with search/filter (by status, date range, department, blacklist)
+- Individual visitor profile: visit history, verification status, notes
+- Bulk import visitors (CSV upload for events/conferences)
+- Blacklist management: add/remove/view with expiration dates
+
+### 5. Visit Requests Queue
+- Filterable table: status, date, type (pre-registered/walk-in), department
+- Approve/reject with optional reason
+- Batch operations (approve/reject multiple)
+- Auto-expire requests past their scheduled time
+
+### 6. QR Code & Entry Pass System
+- Generate unique, time-bound, one-time-use QR codes
+- QR contains: encrypted visit_request_id + visitor_id + expiry timestamp
+- Scanner page (works on tablet/phone camera) for receptionist
+- Visual pass (PDF/image) with: visitor name, host name, date, time, QR code, org logo
+- Pass invalidation after check-out or expiry
+
+### 7. Telegram Bot Integration
+- Bot receives new visit requests with summary (visitor name, purpose, date/time)
+- Inline buttons: ✅ Approve / ❌ Reject / 📋 Details
+- Approval confirmation sent back to bot
+- Daily summary: "You have 3 visitors scheduled for tomorrow"
+- Commands: /today, /pending, /stats, /blacklist [name]
+
+### 8. Reminders & Notifications
+- **To Visitor**: "Your visit to [Org] is confirmed for tomorrow at 10:00 AM. Here is your entry pass: [QR link]"
+- **To Host**: "Reminder: You have a visitor ([Name]) arriving at 10:00 AM today"
+- **To Host**: "[Visitor Name] has checked in at reception"
+- **Overdue Alert to Receptionist**: "Visitor [Name] has been checked in for 4+ hours without checkout"
+- **To Visitor Management**: "3 pending requests need approval"
+- Channels: In-app notification bell, Email, SMS, Telegram
+
+### 9. Reports & Analytics
+- Visitor traffic report (daily/weekly/monthly)
+- Department-level visitor breakdown
+- Average visit duration
+- Peak hours analysis
+- Approval rate & average response time
+- Blacklist activity report
+- Exportable to PDF and Excel
+
+### 10. Public Booking Page
+- Clean, branded page per organization (e.g., ventry.t2.sa/ministry-of-interior)
+- Visitor fills form → request enters queue
+- Captcha protection
+- Multi-language (AR/EN toggle)
+
+### 11. Settings & Configuration
+- Organization profile & branding (logo, colors)
+- Working hours & holidays
+- Auto-approve rules (e.g., returning verified visitors)
+- Notification preferences per role
+- Visitor pass template customization
+- Zone/floor access definitions
+- Data retention policy settings
+- **Verification Settings tab** (dedicated settings page):
+  - Verification policy selector (None / OTP Only / Nafath Only / OTP or Nafath / Nafath Required with OTP Fallback)
+  - Apply-to rules: all visitors, walk-in only, first-time only, high-security zones only
+  - Nafath API credentials (Authentica.sa API key + secret)
+  - Nafath timeout, retry attempts, fallback toggle
+  - OTP settings: length, expiry, max attempts, provider
+  - Trusted visitor verification bypass toggle + re-verification interval
+  - Test button: "Send Test Verification" to verify Nafath/OTP integration is working before going live
+
+### 12. Self-Service Kiosk Mode
+- Full-screen tablet interface
+- Visitor types name/ID → searches pre-registered list
+- If found: verify with OTP → print badge
+- If not found: fill walk-in request form
+- Camera capture for visitor photo
+- Print visitor badge (thermal printer integration via browser print)
+
+### 13. No-Reception / Unmanned Entry Mode (CRITICAL FEATURE)
+Many firms, small businesses, co-working spaces, and branch offices do NOT have a receptionist or front desk. The system must handle visitor verification and entry without any human at the door. The org admin can enable "Unmanned Entry Mode" in settings, which activates the following flows:
+
+**Entry Method A: Smart QR Gate (Primary — for buildings with electronic gate/turnstile/smart lock)**
+1. Visitor arrives at the entrance where a mounted tablet or QR scanner is installed next to the gate.
+2. Visitor scans their pre-issued QR code on the scanner.
+3. System validates: (a) QR is valid and not expired, (b) visit is within scheduled window, (c) QR has not been used before, (d) visitor is not blacklisted.
+4. If valid → system triggers a REAL-TIME OTP to the visitor's registered phone number as a second verification factor (proves the person scanning IS the person invited, not someone who screenshot the QR).
+5. Visitor enters the OTP on the tablet screen.
+6. If OTP matches → gate/lock unlocks automatically (via API integration with smart lock or access control system), visitor is marked as "Checked In", host receives instant notification.
+7. If OTP fails 3 times → entry denied, security alert sent to host + org admin, visitor sees "Please contact your host" message with host's phone number.
+8. On exit: visitor scans QR again at exit scanner OR taps "Check Out" button on a wall-mounted tablet. If no checkout after threshold hours → auto-alert to host.
+
+**Entry Method B: Phone-Based Self-Check-In (For buildings with NO hardware at door)**
+1. When visitor receives their QR entry pass via SMS, the SMS also includes a unique self-check-in link: `https://ventry.t2.sa/checkin/[encrypted-token]`
+2. Visitor arrives at the building and opens the link on their own phone.
+3. System uses the phone's GPS/location to verify the visitor is physically near the building (geo-fence radius configurable: default 100 meters).
+4. If location confirmed → trigger OTP to the same phone (ensures it's the visitor's device, not a forwarded link).
+5. Visitor enters OTP → system marks them as "Checked In", host is notified.
+6. If GPS is outside geo-fence → entry denied with message: "You must be at the building location to check in."
+7. For checkout: visitor clicks "Check Out" from the same link when leaving, or the system auto-checks out after the scheduled window ends.
+
+**Entry Method C: Virtual Reception (Video Call Gate)**
+1. Visitor arrives and scans QR on a wall-mounted tablet with a camera.
+2. System validates QR → if valid, initiates a video/audio call to the host employee (via web browser, no app needed) OR to a centralized virtual receptionist (one person managing multiple locations remotely).
+3. Host/virtual receptionist sees the visitor on camera, verifies identity visually, and taps "Approve Entry" in the app.
+4. Gate unlocks / visitor is checked in.
+5. If host doesn't answer within 2 minutes → fallback to OTP verification. If OTP also fails → deny entry with "Contact your host" message.
+
+**Entry Method D: Pre-Approved Auto-Entry (For trusted/recurring visitors)**
+1. Org admin can flag certain visitors as "Trusted" (e.g., a weekly contractor, a government inspector with ongoing access).
+2. Trusted visitors with a valid pre-registered visit only need to scan their QR code — no OTP, no video call, gate opens immediately.
+3. System still logs the entry with timestamp, camera snapshot (if available), and marks the source as "Auto-Approved (Trusted)".
+4. Trusted status can have an expiry date and can be revoked instantly by org admin.
+5. All auto-entries are flagged in audit logs for periodic security review.
+
+**Configuration (in Org Settings → Entry Mode):**
+```
+Entry Mode:
+  ○ Staffed Reception (default — receptionist scans QR manually)
+  ○ Unmanned Entry — choose methods:
+      ☑ Smart QR Gate (requires gate/lock integration)
+      ☑ Phone Self-Check-In (GPS-based, no hardware needed)
+      ☑ Virtual Reception (video call to host)
+      ☑ Pre-Approved Auto-Entry (trusted visitors only)
+  
+  Geo-fence Radius: [100] meters
+  OTP Timeout: [5] minutes
+  Max OTP Attempts: [3]
+  Video Call Timeout: [120] seconds
+  Auto-Checkout After: [8] hours
+  Trusted Visitor Auto-Expiry: [90] days
+  
+  Gate/Lock Integration:
+      API Endpoint: [https://...]
+      API Key: [••••••••]
+      Lock Command: [unlock_door_1]
+```
+
+**Hardware Integration API (for smart locks/gates/turnstiles):**
+```typescript
+// Generic interface — works with any smart lock/gate vendor
+interface GateController {
+  unlock(gateId: string): Promise<{ success: boolean; unlockDuration: number }>;
+  lock(gateId: string): Promise<{ success: boolean }>;
+  getStatus(gateId: string): Promise<'locked' | 'unlocked' | 'error'>;
+}
+
+// Implementations can be added for:
+// - SALTO smart locks
+// - HID access control
+// - ZKTeco turnstiles
+// - Generic HTTP relay (e.g., Raspberry Pi + magnetic lock)
+// - MQTT-based IoT locks
+```
+
+**Security Safeguards for Unmanned Entry:**
+- Every unmanned check-in requires at least TWO verification factors: QR + OTP, or QR + GPS, or QR + Video, or QR + Trusted status
+- Never QR alone (except Trusted visitors, which have pre-approval)
+- All unmanned entries are flagged in the audit log with the method used
+- Camera snapshot captured at entry (if hardware available) and attached to the visit record
+- Anomaly detection: if a single QR is scanned from multiple devices within 10 minutes → block + alert
+- Rate limit: max 3 entry attempts per visitor per hour at unmanned gates
+- Emergency lockdown: org admin can remotely lock all unmanned gates instantly from the web portal or Telegram bot (/lockdown command)
+- Daily report: all unmanned entries sent to org admin summarizing who entered, method used, any denied attempts
+
+## SECURITY REQUIREMENTS (CRITICAL)
+
+### Identity Verification (Configurable per Organization)
+The verification method is NOT hardcoded — each organization chooses their own verification policy based on their security needs. Government entities may require Nafath for every visitor, while a small business may only need OTP. The system must support all combinations.
+
+**Integration with Authentica.sa (https://authentica.sa/):**
+- OTP verification via SMS (lightweight — visitor receives a code on their phone)
+- Nafath verification (Saudi national digital identity — high assurance, government-grade)
+- Build the integration layer with mock/stub endpoints that can be swapped with real Authentica.sa API calls
+- Nafath flow: System sends a verification request to Authentica → Authentica pushes a notification to the visitor's Nafath app → visitor opens the Nafath app and approves → Authentica confirms to our system → visitor is verified
+
+**Verification Policy Options (org admin configures in Settings → Verification):**
+```
+Verification Policy:
+  ○ None — No identity verification required (visitor registers and gets pass directly)
+  ○ OTP Only — Visitor verifies via SMS OTP (default for SMBs)
+  ○ Nafath Only — Visitor must verify via Nafath app (high security)
+  ○ OTP or Nafath — Visitor chooses their preferred method
+  ○ Nafath Required, OTP Fallback — System attempts Nafath first; if visitor doesn't have Nafath app or it fails, fall back to OTP
+
+Apply Verification To:
+  ☑ All visitors (every visit requires verification)
+  ☑ Walk-in visitors only (pre-registered visitors skip if host vouches)
+  ☑ First-time visitors only (returning verified visitors are remembered)
+  ☐ High-security zones only (only visitors accessing restricted areas)
+  
+Nafath Settings (if Nafath is enabled):
+  Authentica API Key: [••••••••]
+  Authentica API Secret: [••••••••]
+  Nafath Timeout: [180] seconds (how long to wait for visitor to approve in Nafath app)
+  Nafath Retry Attempts: [2]
+  Fallback to OTP if Nafath fails: ☑ Yes / ☐ No
+  
+OTP Settings:
+  OTP Length: [6] digits
+  OTP Expiry: [5] minutes
+  Max OTP Attempts: [3]
+  OTP Provider: Authentica.sa / Twilio / Custom
+  
+Trusted Visitor Override:
+  ☑ Skip verification for Trusted visitors (they verified once, no need to re-verify every visit)
+  Re-verification interval for Trusted: [90] days (force re-verify after this period)
+```
+
+**Verification Flow Logic (implement as middleware/service):**
+```typescript
+interface VerificationService {
+  // Main entry point — checks org policy and routes to correct method
+  verifyVisitor(
+    orgId: string,
+    visitorId: string,
+    context: 'pre_registered' | 'walk_in' | 'kiosk' | 'unmanned_entry'
+  ): Promise<VerificationResult>;
+}
+
+interface VerificationResult {
+  verified: boolean;
+  method: 'nafath' | 'otp' | 'nafath_with_otp_fallback' | 'trusted_bypass' | 'none';
+  verificationId: string;
+  nafathTransactionId?: string;
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  // high = Nafath verified, medium = OTP verified, low = no verification, none = failed
+  timestamp: Date;
+  failureReason?: string;
+}
+
+// Verification decision tree:
+// 1. Check org's verification_policy
+// 2. Check if context matches nafath_required_for (walk_in, first_visit, all)
+// 3. Check if visitor is Trusted AND org allows bypass → skip
+// 4. Check if visitor already verified recently (within re-verification window) → skip
+// 5. Route to appropriate method:
+//    - 'nafath_only' → initiate Nafath, fail if no Nafath
+//    - 'otp_only' → send OTP
+//    - 'otp_or_nafath' → show visitor a choice screen
+//    - 'nafath_required_otp_fallback' → try Nafath, if timeout/fail → OTP
+//    - 'none' → auto-pass with confidence: 'none'
+```
+
+**Nafath Verification UI Flow (for the visitor):**
+```
+┌──────────────────────────────────────┐
+│        Identity Verification         │
+│                                      │
+│  [Nafath Logo]                       │
+│                                      │
+│  Please verify your identity using   │
+│  the Nafath app on your phone.       │
+│                                      │
+│  1. Open the Nafath app              │
+│  2. You will see a verification      │
+│     request from "Availo Ventry"     │
+│  3. Tap "Approve"                    │
+│                                      │
+│  ⏳ Waiting for approval...          │
+│     [||||||||||||          ] 2:34     │
+│                                      │
+│  ─────────── OR ───────────          │
+│                                      │
+│  Don't have Nafath?                  │
+│  [Verify with SMS OTP instead]       │
+│  (if org allows OTP fallback)        │
+│                                      │
+│  [Cancel Visit Request]              │
+└──────────────────────────────────────┘
+```
+
+**Verification Badge on Visit Records:**
+Every visit record displays a verification badge showing which method was used:
+- 🟢 **Nafath Verified** — highest trust, government-grade
+- 🔵 **OTP Verified** — standard trust, phone confirmed
+- 🟡 **Trusted Bypass** — no verification this visit, but previously verified
+- ⚪ **Not Verified** — org policy is "none"
+- 🔴 **Verification Failed** — attempted but failed (flagged for review)
+
+These badges appear on: the visit request detail page, the receptionist check-in screen, the dashboard visitor list, and in exported PDF reports.
+
+**Verification Analytics (in Reports):**
+- Breakdown of verification methods used (pie chart: Nafath vs OTP vs Trusted vs None)
+- Nafath success rate vs timeout rate vs fallback-to-OTP rate
+- Average Nafath verification time (how long visitors take to approve)
+- Failed verification attempts with reasons
+- Visitors who consistently fail Nafath (may indicate they don't have the app — suggest OTP or prompt them to install Nafath)
+
+### Access Control
+- Role-based access control (RBAC) enforced on EVERY API route and page — see Permission Matrix in ROLE HIERARCHY section above
+- THREE levels of isolation enforced on every request:
+  - Level 1 — Authentication: is the user logged in with a valid session?
+  - Level 2 — Role check: does the user's role permit this action? (see Permission Matrix)
+  - Level 3 — Scope check: is the user accessing data within their org AND their assigned branch?
+- Organization-level data isolation (tenant separation) — users can NEVER see other org's data (except Super Admin)
+- Branch-level data scoping — Receptionist and Host Employee can only see their own branch's data. Visitor Manager sees their assigned branch(es). Org Admin sees all branches.
+- Session management with JWT + refresh tokens, auto-expire after 30 min inactivity
+- Two-factor authentication: MANDATORY for Super Admin and Org Admin roles, RECOMMENDED for Visitor Manager, OPTIONAL for Receptionist and Host Employee
+- Sensitive actions require re-authentication: changing verification policy, managing users, viewing audit logs, triggering evacuation, impersonating an org
+- User invitation flow: users CANNOT self-register — they must be invited by someone with appropriate permission (Super Admin invites Org Admin, Org Admin invites everyone else)
+- Account lockout: 5 failed login attempts → lock for 15 minutes → alert the user who invited them
+- Password policy: min 8 characters, must include uppercase + number + special character, expire every 90 days (configurable), no reuse of last 5 passwords
+- Super Admin impersonation: logged in audit trail with "impersonated_by" field, visible banner in UI, auto-expires after 30 minutes
+
+### Data Security
+- All QR codes are one-time-use and time-bound (expire after scheduled window + 30 min grace)
+- National ID numbers stored encrypted at rest (AES-256)
+- Audit log for every action (who did what, when, from which IP)
+- Rate limiting on all public endpoints (booking page, API)
+- CAPTCHA on public-facing forms
+- SQL injection & XSS protection (Prisma handles parameterized queries)
+- CORS restricted to known domains
+- PDPL (Saudi Personal Data Protection Law) compliance: data retention limits, consent tracking, right to deletion
+
+### Anti-Flood & Request Abuse Protection (CRITICAL)
+The system MUST be resilient to request flooding from both visitor-side and company-side:
+
+**Visitor-Side (Public Booking Page & Kiosk) Protection:**
+- IP-based rate limiting: max 5 visit requests per IP per hour, max 20 per IP per day
+- National ID rate limiting: max 3 pending requests per national ID across ALL organizations at any time
+- Phone number rate limiting: max 5 OTP requests per phone per hour (prevents SMS bombing / cost attack)
+- Progressive CAPTCHA: invisible reCAPTCHA on first request → visible challenge after 2nd request from same session → block after 5 failed CAPTCHAs
+- Honeypot fields in the public booking form (hidden fields that bots fill but humans don't — auto-reject if filled)
+- Request cooldown: same visitor cannot submit a new request to the same organization within 30 minutes of a previous submission
+- Disposable/VoIP phone number detection: flag requests using known disposable number patterns
+- Geo-fencing (optional): org admin can restrict visit requests to originate from within Saudi Arabia only
+- Abuse scoring: each request gets a risk score (0-100) based on: IP reputation, request velocity, form completion speed (too fast = bot), duplicate patterns. Requests scoring above threshold are auto-held for manual review instead of entering the normal queue.
+
+**Company-Side (Host Employee & Internal) Protection:**
+- Per-employee daily request cap: configurable limit (default 20 visit requests per employee per day) — prevents a compromised or rogue account from flooding the system
+- Per-organization daily cap: configurable maximum total requests per org per day (e.g., 200 for SMB, 1000 for enterprise, 5000 for government) — exceeding triggers admin alert, does not hard-block
+- Bulk import size limit: max 500 visitors per CSV upload, max 3 bulk imports per day per user
+- Session anomaly detection: if an employee account suddenly creates 50+ requests in 10 minutes (vs their normal 2-3/day), auto-lock the account and alert the org admin
+- API key rate limiting: if the system exposes APIs for integration, enforce per-key request quotas (e.g., 100 requests/minute) with exponential backoff on 429 responses
+- Approval queue overflow protection: if pending requests exceed a threshold (e.g., 500 per org), new requests are queued in a "waiting room" and the org admin is alerted — prevents the approval queue from becoming unmanageable
+
+**Global Platform Protection:**
+- WAF (Web Application Firewall) rules: block known bot user agents, enforce request size limits
+- DDoS protection at infrastructure level (Cloudflare or equivalent)
+- Global rate limit: max 1000 requests per minute per organization across all endpoints
+- Suspicious pattern alerts to T2 super admin: org with 10x normal traffic, new org creating thousands of requests on day one, etc.
+- Automatic temporary IP ban after 100 failed requests in 5 minutes (with CAPTCHA unlock)
+- All rate limit hits logged in audit trail with IP, user agent, and trigger reason
+
+**Database Model Addition — Request Throttle Tracking:**
+```
+Rate Limit Log:
+- id, entity_type (ip | national_id | phone | user | org), entity_value
+- action (visit_request | otp_request | login | api_call)
+- window_start, request_count, last_request_at
+- is_blocked, blocked_until, block_reason
+```
+
+**Admin Controls for Flood Protection:**
+- Org admin can configure all thresholds (daily caps, cooldown periods, abuse score threshold)
+- Dashboard widget: "Blocked/Flagged Requests" showing recent abuse attempts
+- One-click IP ban from the flagged requests view
+- Whitelist for trusted IPs/partners (e.g., a partner company's office IP skips stricter rate limits)
+- Alert notification channel: email + Telegram to security team when flood is detected
+
+### Visitor Safety Controls
+- Blacklist check on every check-in attempt (block + alert security)
+- Visitor overstay alerts (configurable threshold, e.g., 4 hours)
+- Emergency evacuation mode: one-click export of all currently checked-in visitors (name, phone, location/zone)
+- Maximum concurrent visitors limit per organization
+- Duplicate visit detection (same visitor, same day, same org)
+
+## UI/UX REQUIREMENTS
+- Clean, professional design suitable for government use
+- RTL-first layout with seamless AR/EN switching
+- Mobile-responsive (receptionist will use tablets)
+- Dark mode support
+- Loading skeletons, optimistic updates, toast notifications
+- Accessibility (WCAG 2.1 AA)
+- Status color coding: Pending (amber), Approved (blue), Checked-In (green), Checked-Out (gray), Rejected (red), Expired (dark gray), Blacklisted (red with icon)
+
+## BRAND ASSETS & LOGO USAGE
+
+### Complete Color System
+
+**CRITICAL: Add all these colors to your Tailwind config (`tailwind.config.ts`) and use ONLY these tokens throughout the app. Never hardcode hex values in components — always reference the token name.**
+
+#### 1. Core Brand Palette (Full Scales)
+
+```
+BRAND BLUE (Primary — buttons, links, "Ventry" text, active states)
+  brand-50:   #eff6ff    ← Light tint backgrounds (selected row, active tab bg)
+  brand-100:  #dbeafe    ← Hover backgrounds, subtle highlights
+  brand-200:  #bfdbfe    ← Focus rings, light borders
+  brand-300:  #93c5fd    ← Disabled button text on dark bg
+  brand-400:  #60a5fa    ← Dark mode link text, secondary blue actions
+  brand-500:  #3b82f6    ← Standard links in dark mode, icon fills
+  brand-600:  #2563eb    ← ★ PRIMARY — buttons, "Ventry" text, links, badges
+  brand-700:  #1d4ed8    ← Button hover state, active links
+  brand-800:  #1e40af    ← Button active/pressed state, logo gradient start
+  brand-900:  #1e3a8a    ← Dark accents
+  brand-950:  #172554    ← Ultra-dark brand, dark mode card headers
+
+NAVY (Headings, body text, "Availo" text, dark surfaces)
+  navy-50:    #f0f4f8    ← Page background (light mode)
+  navy-100:   #e2e8f0    ← Dividers, subtle borders
+  navy-200:   #cbd5e1    ← Input borders (default state)
+  navy-300:   #94a3b8    ← Placeholder text, muted icons, tagline
+  navy-400:   #64748b    ← Secondary text, help text, captions
+  navy-500:   #475569    ← Body text (secondary)
+  navy-600:   #334155    ← Body text (primary)
+  navy-700:   #1e293b    ← Headings (H2-H6), nav items
+  navy-800:   #0f172a    ← ★ Dark mode background, sidebar dark
+  navy-900:   #0c1a3a    ← ★ Headings (H1), "Availo" text, hero text
+  navy-950:   #020617    ← Absolute dark (overlays, tooltips bg)
+
+SKY BLUE (Accents, gradients, highlights, decorative)
+  sky-50:     #f0f9ff    ← Info alert background
+  sky-100:    #e0f2fe    ← Tag background, chip bg
+  sky-200:    #bae6fd    ← Progress bar track
+  sky-300:    #7dd3fc    ← Logo gradient end, decorative elements
+  sky-400:    #38bdf8    ← ★ Hover accents, gradient midpoint, icon highlights
+  sky-500:    #0ea5e9    ← Info icons, link hover in dark mode
+  sky-600:    #0284c7    ← Info text
+  sky-700:    #0369a1    ← Info border
+  sky-800:    #075985    ← Dark mode info
+  sky-900:    #0c4a6e    ← Dark info accent
+```
+
+#### 2. Semantic Colors (Status & Feedback)
+
+```
+SUCCESS GREEN (Checked-in, approved, verified, online, active)
+  success-50:   #f0fdf4    ← Success alert bg, toast bg
+  success-100:  #dcfce7    ← Checked-in row highlight
+  success-200:  #bbf7d0    ← Success badge bg (light)
+  success-300:  #86efac    ← Progress bar fill (complete)
+  success-400:  #4ade80    ← Online indicator dot
+  success-500:  #22c55e    ← Success icon fill
+  success-600:  #16a34a    ← ★ PRIMARY SUCCESS — check-in badge, "Active" status, success text
+  success-700:  #15803d    ← Success text on white bg
+  success-800:  #166534    ← Dark mode success
+  success-900:  #14532d    ← Dark success accent
+
+WARNING AMBER (Pending, approaching expiry, needs attention, overstay alert)
+  warning-50:   #fffbeb    ← Warning alert bg, toast bg
+  warning-100:  #fef3c7    ← Pending row highlight
+  warning-200:  #fde68a    ← Warning badge bg (light)
+  warning-300:  #fcd34d    ← Expiry countdown < 1 hour
+  warning-400:  #fbbf24    ← Warning icon fill
+  warning-500:  #f59e0b    ← ★ PRIMARY WARNING — pending badge, "Pending" status
+  warning-600:  #d97706    ← Warning text on white bg
+  warning-700:  #b45309    ← Overstay alert text
+  warning-800:  #92400e    ← Dark mode warning
+  warning-900:  #78350f    ← Dark warning accent
+
+DANGER RED (Rejected, blacklisted, failed verification, error, blocked, emergency)
+  danger-50:    #fef2f2    ← Error alert bg, toast bg
+  danger-100:   #fee2e2    ← Rejected row highlight, blacklist row
+  danger-200:   #fecaca    ← Error badge bg (light)
+  danger-300:   #fca5a5    ← Failed verification badge bg
+  danger-400:   #f87171    ← Error icon fill, danger indicator
+  danger-500:   #ef4444    ← Destructive button (secondary)
+  danger-600:   #dc2626    ← ★ PRIMARY DANGER — reject badge, "Blacklisted" status, error text, destructive button
+  danger-700:   #b91c1c    ← Destructive button hover
+  danger-800:   #991b1b    ← Destructive button pressed, dark mode error
+  danger-900:   #7f1d1d    ← Dark danger accent
+  danger-950:   #450a0a    ← Emergency lockdown banner bg
+
+NEUTRAL GRAY (Borders, disabled, inactive, checked-out, expired, dividers)
+  neutral-50:   #f9fafb    ← Card background, alt table row
+  neutral-100:  #f3f4f6    ← Page background alternative, input bg
+  neutral-200:  #e5e7eb    ← Borders, dividers, disabled bg
+  neutral-300:  #d1d5db    ← Disabled text, checkbox border
+  neutral-400:  #9ca3af    ← Placeholder text, muted icons
+  neutral-500:  #6b7280    ← Secondary text, help text
+  neutral-600:  #4b5563    ← ★ "Checked Out" badge, "Expired" status text
+  neutral-700:  #374151    ← Label text
+  neutral-800:  #1f2937    ← Dark mode card bg, dark mode input bg
+  neutral-900:  #111827    ← Dark mode surface
+  neutral-950:  #030712    ← Dark mode overlay
+```
+
+#### 3. Special Purpose Colors
+
+```
+VISIT STATUS COLORS (Used in badges, table rows, dashboard cards, charts)
+  status-pending:        #f59e0b (warning-500)  — Amber dot + "Pending" text
+  status-pending-bg:     #fffbeb (warning-50)    — Row/card highlight
+  status-approved:       #2563eb (brand-600)     — Blue dot + "Approved" text
+  status-approved-bg:    #eff6ff (brand-50)      — Row/card highlight
+  status-checked-in:     #16a34a (success-600)   — Green dot + "Checked In" text
+  status-checked-in-bg:  #f0fdf4 (success-50)    — Row/card highlight
+  status-checked-out:    #6b7280 (neutral-500)   — Gray dot + "Checked Out" text
+  status-checked-out-bg: #f9fafb (neutral-50)    — Row/card highlight
+  status-rejected:       #dc2626 (danger-600)    — Red dot + "Rejected" text
+  status-rejected-bg:    #fef2f2 (danger-50)     — Row/card highlight
+  status-expired:        #374151 (neutral-700)   — Dark gray dot + "Expired" text
+  status-expired-bg:     #f3f4f6 (neutral-100)   — Row/card highlight
+  status-blacklisted:    #991b1b (danger-800)    — Dark red dot + skull icon + "Blacklisted" text
+  status-blacklisted-bg: #fee2e2 (danger-100)    — Row/card highlight
+  status-cancelled:      #9ca3af (neutral-400)   — Muted gray + "Cancelled" text
+
+VERIFICATION BADGE COLORS
+  verify-nafath:         #16a34a (success-600)   — 🟢 Nafath Verified (highest trust)
+  verify-nafath-bg:      #f0fdf4 (success-50)
+  verify-otp:            #2563eb (brand-600)     — 🔵 OTP Verified (standard)
+  verify-otp-bg:         #eff6ff (brand-50)
+  verify-trusted:        #d97706 (warning-600)   — 🟡 Trusted Bypass
+  verify-trusted-bg:     #fffbeb (warning-50)
+  verify-none:           #9ca3af (neutral-400)   — ⚪ Not Verified
+  verify-none-bg:        #f9fafb (neutral-50)
+  verify-failed:         #dc2626 (danger-600)    — 🔴 Verification Failed
+  verify-failed-bg:      #fef2f2 (danger-50)
+
+ROLE BADGE COLORS (Shown next to usernames in user management, audit logs)
+  role-super-admin:      #7c3aed   — Purple (Violet-600)
+  role-super-admin-bg:   #f5f3ff   — Violet-50
+  role-org-admin:        #0c1a3a   — Navy-900
+  role-org-admin-bg:     #f0f4f8   — Navy-50
+  role-visitor-mgr:      #2563eb   — Brand-600
+  role-visitor-mgr-bg:   #eff6ff   — Brand-50
+  role-receptionist:     #0891b2   — Cyan-600
+  role-receptionist-bg:  #ecfeff   — Cyan-50
+  role-host-employee:    #475569   — Navy-500
+  role-host-employee-bg: #f3f4f6   — Neutral-100
+
+ORGANIZATION STATUS COLORS (Super Admin dashboard)
+  org-active:            #16a34a   — Green (active)
+  org-pending-setup:     #f59e0b   — Amber (awaiting setup wizard)
+  org-suspended:         #dc2626   — Red (suspended)
+  org-deactivated:       #9ca3af   — Gray (deactivated)
+
+INVITATION STATUS COLORS
+  invite-pending:        #f59e0b   — Amber
+  invite-accepted:       #16a34a   — Green
+  invite-expired:        #6b7280   — Gray
+  invite-revoked:        #dc2626   — Red
+
+FLOOD / ABUSE RISK SCORE COLORS (Gradient from safe to dangerous)
+  risk-0-20:             #16a34a   — Green (low risk, trusted)
+  risk-21-40:            #22c55e   — Light green (normal)
+  risk-41-60:            #f59e0b   — Amber (moderate, needs review)
+  risk-61-80:            #ef4444   — Red (high risk, auto-held)
+  risk-81-100:           #991b1b   — Dark red (blocked)
+
+CHART / DASHBOARD COLORS (For graphs, pie charts, heatmaps)
+  chart-1:               #2563eb   — Brand Blue (primary data series)
+  chart-2:               #38bdf8   — Sky Blue (secondary series)
+  chart-3:               #16a34a   — Green (third series)
+  chart-4:               #f59e0b   — Amber (fourth series)
+  chart-5:               #7c3aed   — Purple (fifth series)
+  chart-6:               #ec4899   — Pink (sixth series)
+  chart-7:               #0891b2   — Cyan (seventh series)
+  chart-8:               #64748b   — Slate (eighth series / "other")
+```
+
+#### 4. Dark Mode Mapping
+
+```
+LIGHT MODE                          DARK MODE
+─────────────────────────────────── ───────────────────────────────────
+Page background:     #ffffff        → #0f172a (navy-800)
+Card/surface:        #ffffff        → #1e293b (navy-700)
+Card elevated:       #f9fafb        → #334155 (navy-600)
+Border:              #e5e7eb        → #334155 (navy-600)
+Divider:             #e2e8f0        → #1e293b (navy-700)
+Input bg:            #ffffff        → #0f172a (navy-800)
+Input border:        #cbd5e1        → #475569 (navy-500)
+Input border focus:  #2563eb        → #60a5fa (brand-400)
+Text primary:        #0c1a3a        → #f1f5f9 (slate-100)
+Text secondary:      #475569        → #94a3b8 (navy-300)
+Text muted:          #94a3b8        → #64748b (navy-400)
+Text link:           #2563eb        → #60a5fa (brand-400)
+Text link hover:     #1d4ed8        → #93c5fd (brand-300)
+Button primary bg:   #2563eb        → #2563eb (same — brand-600)
+Button primary text: #ffffff        → #ffffff (same)
+Button hover:        #1d4ed8        → #3b82f6 (brand-500)
+Sidebar bg:          #0c1a3a        → #020617 (navy-950)
+Sidebar text:        #94a3b8        → #94a3b8 (same)
+Sidebar active:      #2563eb        → #3b82f6 (brand-500)
+Sidebar active bg:   #1e3a8a        → #172554 (brand-950)
+Navbar bg:           #ffffff        → #0f172a (navy-800)
+Navbar border:       #e2e8f0        → #1e293b (navy-700)
+Badge text:          (per status)   → (same per status — badges keep colors)
+Badge bg:            (per status)   → opacity-20 versions of status colors
+Toast bg:            #ffffff        → #1e293b (navy-700)
+Dropdown bg:         #ffffff        → #1e293b (navy-700)
+Dropdown hover:      #f3f4f6        → #334155 (navy-600)
+Modal overlay:       rgba(0,0,0,0.5) → rgba(0,0,0,0.7)
+Skeleton pulse:      #e5e7eb        → #334155 (navy-600)
+```
+
+#### 5. Tailwind Configuration
+
+```typescript
+// tailwind.config.ts — paste this entire colors object into your config
+import type { Config } from 'tailwindcss'
+
+const config: Config = {
+  darkMode: 'class',
+  content: ['./app/**/*.{ts,tsx}', './components/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        // Core brand
+        brand: {
+          50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
+          400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8',
+          800: '#1e40af', 900: '#1e3a8a', 950: '#172554',
+        },
+        navy: {
+          50: '#f0f4f8', 100: '#e2e8f0', 200: '#cbd5e1', 300: '#94a3b8',
+          400: '#64748b', 500: '#475569', 600: '#334155', 700: '#1e293b',
+          800: '#0f172a', 900: '#0c1a3a', 950: '#020617',
+        },
+        sky: {
+          50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
+          400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
+          800: '#075985', 900: '#0c4a6e',
+        },
+        // Semantic
+        success: {
+          50: '#f0fdf4', 100: '#dcfce7', 200: '#bbf7d0', 300: '#86efac',
+          400: '#4ade80', 500: '#22c55e', 600: '#16a34a', 700: '#15803d',
+          800: '#166534', 900: '#14532d',
+        },
+        warning: {
+          50: '#fffbeb', 100: '#fef3c7', 200: '#fde68a', 300: '#fcd34d',
+          400: '#fbbf24', 500: '#f59e0b', 600: '#d97706', 700: '#b45309',
+          800: '#92400e', 900: '#78350f',
+        },
+        danger: {
+          50: '#fef2f2', 100: '#fee2e2', 200: '#fecaca', 300: '#fca5a5',
+          400: '#f87171', 500: '#ef4444', 600: '#dc2626', 700: '#b91c1c',
+          800: '#991b1b', 900: '#7f1d1d', 950: '#450a0a',
+        },
+      },
+      backgroundImage: {
+        'brand-gradient': 'linear-gradient(135deg, #1e40af 0%, #2563eb 45%, #38bdf8 100%)',
+      },
+    },
+  },
+}
+export default config
+```
+
+#### 6. CSS Variables (for components that can't use Tailwind classes)
+
+```css
+/* /app/globals.css */
+:root {
+  /* Brand */
+  --brand-primary: #2563eb;
+  --brand-primary-hover: #1d4ed8;
+  --brand-primary-active: #1e40af;
+  --brand-light: #38bdf8;
+  --brand-gradient: linear-gradient(135deg, #1e40af 0%, #2563eb 45%, #38bdf8 100%);
+
+  /* Text */
+  --text-heading: #0c1a3a;
+  --text-primary: #334155;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-link: #2563eb;
+  --text-on-brand: #ffffff;
+
+  /* Surface */
+  --bg-page: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-elevated: #f9fafb;
+  --bg-sidebar: #0c1a3a;
+  --bg-input: #ffffff;
+
+  /* Border */
+  --border-default: #e5e7eb;
+  --border-input: #cbd5e1;
+  --border-focus: #2563eb;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(12, 26, 58, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(12, 26, 58, 0.07), 0 2px 4px -2px rgba(12, 26, 58, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(12, 26, 58, 0.08), 0 4px 6px -4px rgba(12, 26, 58, 0.04);
+  --shadow-brand: 0 4px 14px rgba(37, 99, 235, 0.25);
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+}
+
+.dark {
+  --text-heading: #f1f5f9;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-link: #60a5fa;
+  --text-on-brand: #ffffff;
+
+  --bg-page: #0f172a;
+  --bg-card: #1e293b;
+  --bg-card-elevated: #334155;
+  --bg-sidebar: #020617;
+  --bg-input: #0f172a;
+
+  --border-default: #334155;
+  --border-input: #475569;
+  --border-focus: #60a5fa;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  --shadow-brand: 0 4px 14px rgba(37, 99, 235, 0.15);
+}
+```
+
+#### 7. Component Color Usage Reference
+
+```
+BUTTONS:
+  Primary:          bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800
+                    shadow-[var(--shadow-brand)] on hover
+  Secondary:        bg-white border border-navy-200 text-navy-700
+                    hover:bg-navy-50 dark:bg-navy-800 dark:border-navy-600
+  Destructive:      bg-danger-600 text-white hover:bg-danger-700 active:bg-danger-800
+  Ghost:            bg-transparent text-brand-600 hover:bg-brand-50
+  Outline:          border border-brand-600 text-brand-600 hover:bg-brand-50
+
+INPUTS:
+  Default:          bg-white border-navy-200 text-navy-700 placeholder:text-navy-300
+  Focus:            border-brand-600 ring-2 ring-brand-200
+  Error:            border-danger-500 ring-2 ring-danger-200
+  Disabled:         bg-neutral-100 text-neutral-400 cursor-not-allowed
+
+TABLE ROWS:
+  Default:          bg-white (odd), bg-neutral-50 (even)
+  Hover:            bg-navy-50
+  Selected:         bg-brand-50 border-l-2 border-brand-600
+  Status highlight: bg-[status-*-bg] — see status colors above
+
+BADGES / CHIPS:
+  Pattern:          bg-[color-50 or 100] text-[color-600 or 700] rounded-full px-2.5 py-0.5 text-xs font-medium
+  Status dot:       w-2 h-2 rounded-full bg-[status-color] inline-block mr-1.5
+  Example:          <span class="bg-success-50 text-success-700">● Checked In</span>
+
+SIDEBAR:
+  Background:       bg-navy-900 (light) / bg-navy-950 (dark)
+  Text default:     text-navy-300
+  Text hover:       text-white
+  Active item:      text-white bg-brand-800/30 border-r-2 border-brand-400
+  Section heading:  text-navy-400 uppercase text-xs tracking-wider
+
+CARDS:
+  Default:          bg-white rounded-lg shadow-sm border border-neutral-200
+                    dark:bg-navy-700 dark:border-navy-600
+  Hover:            shadow-md transition-shadow
+  Dashboard stat:   Same card + colored top border (border-t-4 border-brand-600)
+
+TOASTS / ALERTS:
+  Info:             bg-sky-50 text-sky-700 border-sky-200
+  Success:          bg-success-50 text-success-700 border-success-200
+  Warning:          bg-warning-50 text-warning-700 border-warning-200
+  Error:            bg-danger-50 text-danger-700 border-danger-200
+
+NAVBAR:
+  Background:       bg-white border-b border-navy-100
+                    dark:bg-navy-800 dark:border-navy-700
+  Logo area:        Horizontal logo (see BrandLogo component)
+  User avatar ring: ring-2 ring-brand-200
+
+MODALS:
+  Overlay:          bg-black/50 dark:bg-black/70
+  Container:        bg-white rounded-xl shadow-lg dark:bg-navy-700
+
+TABS:
+  Default:          text-navy-400 border-b-2 border-transparent
+  Active:           text-brand-600 border-b-2 border-brand-600
+  Hover:            text-navy-700
+
+PROGRESS BAR:
+  Track:            bg-neutral-200 dark:bg-navy-600
+  Fill:             bg-brand-600 (normal), bg-success-500 (complete), bg-warning-500 (approaching limit)
+
+SKELETON LOADING:
+  Pulse:            bg-neutral-200 dark:bg-navy-600 animate-pulse rounded
+
+EMERGENCY / LOCKDOWN BANNER:
+  Background:       bg-danger-950 text-white
+  Animated:         animate-pulse border border-danger-500
+```
+
+#### 8. Accessibility Notes
+```
+All color pairings MUST meet WCAG 2.1 AA contrast ratios (4.5:1 for text, 3:1 for large text/UI):
+  ✅ navy-900 on white = 16.75:1 (AAA)
+  ✅ brand-600 on white = 4.56:1 (AA)
+  ✅ brand-700 on white = 5.96:1 (AA)
+  ✅ success-700 on success-50 = 6.2:1 (AA)
+  ✅ danger-700 on danger-50 = 6.8:1 (AA)
+  ✅ warning-700 on warning-50 = 5.1:1 (AA)
+  ⚠️ brand-600 on brand-50 = 4.3:1 (borderline — use brand-700 for small text on light blue)
+  ⚠️ warning-500 on white = 3.2:1 (fails for small text — use warning-600 or 700 for text)
+
+  Never use:
+  ❌ Light text on light background
+  ❌ Brand-400 or lighter for text on white (fails contrast)
+  ❌ Status colors alone to convey meaning — always pair with icon + text label
+```
+
+### Logo Files (provided in /public/brand/)
+The following logo files are included in the project. Place them in `/public/brand/` and reference them throughout the app:
+
+```
+/public/brand/
+├── logo-main-white.svg          → Default logo (white background) — use on login page, landing page, reports header
+├── logo-main-white.png          → PNG fallback (3200x1120) for emails, PDF exports, OG meta tags
+├── logo-transparent.svg         → Transparent background — use when placing logo over colored/image backgrounds
+├── logo-dark.svg                → Dark mode logo (light text on dark bg) — auto-switch when dark mode is active
+├── logo-horizontal.svg          → Compact single-line logo — use in navbar/header bar, sidebar collapsed state
+├── logo-horizontal.png          → PNG fallback for horizontal (1760x320)
+├── logo-icon.svg                → Icon only (T2 mark) — use as favicon source, app icon, loading spinner placeholder
+├── logo-icon-1024.png           → App icon 1024x1024 — for PWA manifest, app store listing
+├── logo-icon-512.png            → App icon 512x512 — for PWA manifest
+├── logo-icon-192.png            → PWA icon 192x192
+├── favicon-64.png               → Browser favicon
+├── favicon-32.png               → Browser favicon small
+└── logo-presentation-1920.png   → 1920px wide — for pitch decks, social media banners
+```
+
+### Logo Gradient (for the T2 icon mark)
+When rendering the icon programmatically (e.g., in SVG or CSS), use this gradient:
+```css
+background: linear-gradient(135deg, #1e40af 0%, #2563eb 45%, #38bdf8 100%);
+```
+
+### Where to Place Each Logo
+
+| Location | Logo File | Notes |
+|----------|-----------|-------|
+| **Navbar / Header** | `logo-horizontal.svg` | Light mode: default. Dark mode: swap to `logo-dark.svg` horizontal version or white text variant |
+| **Login Page** | `logo-main-white.svg` | Centered, large, with tagline "Where Visits Begin" underneath |
+| **Sidebar (collapsed)** | `logo-icon.svg` | Icon only when sidebar is collapsed, full horizontal when expanded |
+| **Public Booking Page** | `logo-main-white.svg` | Top of page, followed by the organization's own logo |
+| **Kiosk Mode** | `logo-main-white.svg` | Large centered logo on welcome/idle screen |
+| **Visitor Entry Pass (QR PDF)** | `logo-main-white.png` | Top-left corner of the generated pass, PNG for PDF embedding |
+| **Email Templates** | `logo-main-white.png` | PNG at top of all transactional emails (approval, reminder, QR pass) |
+| **PDF Reports** | `logo-main-white.png` | Header of exported reports |
+| **Browser Tab** | `favicon-32.png` / `favicon-64.png` | Standard favicon |
+| **PWA Manifest** | `logo-icon-192.png` + `logo-icon-512.png` | Required for "Add to Home Screen" |
+| **OG / Social Meta Tags** | `logo-presentation-1920.png` | `<meta property="og:image">` for link previews on social/chat |
+| **Telegram Bot Messages** | `logo-icon-512.png` | Bot profile photo, and thumbnail in notification messages |
+| **Loading / Splash Screen** | `logo-icon.svg` | Animated pulse/fade on the icon while app loads |
+| **Error Pages (404, 500)** | `logo-icon.svg` | Subtle icon with error message below |
+| **Footer** | `logo-horizontal.svg` (dimmed/gray) | Small, muted version in footer with "Powered by T2" |
+
+### Dark Mode Logo Switching Logic
+```tsx
+// Implement in a reusable <BrandLogo /> component
+// Automatically switch between light and dark logo variants
+const BrandLogo = ({ variant = 'main' }) => {
+  const { theme } = useTheme(); // from next-themes or your theme provider
+  const isDark = theme === 'dark';
+  
+  const logoMap = {
+    main: isDark ? '/brand/logo-dark.svg' : '/brand/logo-main-white.svg',
+    horizontal: isDark ? '/brand/logo-dark.svg' : '/brand/logo-horizontal.svg',
+    icon: '/brand/logo-icon.svg', // icon works on both themes (uses gradient)
+  };
+  
+  return <Image src={logoMap[variant]} alt="Availo Ventry" />;
+};
+```
+
+### Visitor Entry Pass Design (QR Code PDF/Image)
+When generating the visitor entry pass, use this layout:
+```
+┌─────────────────────────────────────┐
+│  [Availo Ventry Logo]    [Org Logo] │
+│                                     │
+│  VISITOR PASS                       │
+│  ─────────────────                  │
+│  Name: Mohammed Al-Rashid           │
+│  Organization: Ministry of Interior │
+│  Host: Ahmed bin Saleh              │
+│  Date: 17 Mar 2026                  │
+│  Time: 10:00 AM – 12:00 PM         │
+│  Purpose: Project Review Meeting    │
+│                                     │
+│         ┌───────────┐              │
+│         │  QR CODE  │              │
+│         │           │              │
+│         └───────────┘              │
+│  Pass ID: VNT-2026-00482           │
+│  ⚠ One-time use only               │
+│  ⚠ Valid for scheduled window only  │
+│                                     │
+│  Where Visits Begin | ventry.t2.sa  │
+└─────────────────────────────────────┘
+```
+
+### PWA Manifest (web.manifest)
+```json
+{
+  "name": "Availo Ventry",
+  "short_name": "Ventry",
+  "description": "Smart Visitor Management - Where Visits Begin",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "/brand/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/brand/favicon-64.png", "sizes": "64x64", "type": "image/png" },
+    { "src": "/brand/logo-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/brand/logo-icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/brand/logo-icon-1024.png", "sizes": "1024x1024", "type": "image/png" }
+  ]
+}
+```
+
+### HTML Head Meta Tags
+```html
+<head>
+  <title>Availo Ventry — Where Visits Begin</title>
+  <meta name="description" content="Smart visitor management platform for government and enterprise. Secure registration, identity verification, and QR-based entry passes." />
+  <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/brand/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/brand/logo-icon-192.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#2563eb" />
+  
+  <!-- Open Graph / Social -->
+  <meta property="og:title" content="Availo Ventry — Where Visits Begin" />
+  <meta property="og:description" content="Smart visitor management for government and enterprise." />
+  <meta property="og:image" content="https://ventry.t2.sa/brand/logo-presentation-1920.png" />
+  <meta property="og:type" content="website" />
+  
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="https://ventry.t2.sa/brand/logo-presentation-1920.png" />
+</head>
+```
+
+## SEED DATA
+Generate realistic seed data with:
+- 1 Super Admin user (T2 platform admin)
+- 3 sample organizations (government ministry — active, private company — active, small business — pending_setup)
+  - Each org has: 1-2 branches, verification policy configured
+- 15 users across ALL roles:
+  - 1 Super Admin
+  - 3 Org Admins (1 per org, the SMB one hasn't completed setup wizard yet)
+  - 3 Visitor Managers (assigned to specific branches)
+  - 3 Receptionists (assigned to specific branches)
+  - 5 Host Employees (across branches)
+- 2 pending user invitations (1 accepted, 1 still pending)
+- 30 visitors with varied statuses (including some Nafath-verified, some OTP-verified, some blacklisted)
+- 50 visit requests spanning the last 30 days (mix of pre-registered and walk-in, all statuses)
+- Arabic and English content for all seeded records
+- Audit log entries for: org creation, user invitations, role changes, policy updates
+
+## FILE STRUCTURE
+Use Next.js App Router conventions:
+- /app/(auth)/ — login, forgot password, accept-invitation/[token], setup-password
+- /app/(admin)/ — Super Admin platform portal (protected: super_admin role only)
+- /app/(admin)/organizations — org list, create, detail, onboarding wizard
+- /app/(admin)/analytics — platform-wide analytics
+- /app/(admin)/settings — platform settings, SMS/Nafath config
+- /app/(portal)/dashboard — role-based dashboard (adapts to user's role)
+- /app/(portal)/visitors — visitor directory
+- /app/(portal)/requests — visit request queue
+- /app/(portal)/reports — analytics & reports
+- /app/(portal)/settings — org settings (Org Admin only)
+- /app/(portal)/settings/users — user management, invite, deactivate
+- /app/(portal)/settings/branches — branch management
+- /app/(portal)/settings/verification — Nafath/OTP policy config
+- /app/(portal)/setup-wizard — org setup wizard (first login for new Org Admin)
+- /app/(public)/book/[org-slug] — public booking page
+- /app/(kiosk)/ — self-service kiosk mode
+- /app/api/ — API routes
+- /app/api/admin/ — Super Admin API routes (create org, manage orgs, platform stats)
+- /app/api/invitations/ — invitation create, accept, resend, revoke
+- /app/api/users/ — user CRUD, role assignment, deactivate
+- /lib/ — utilities, auth, db, integrations
+- /lib/auth/ — authentication, JWT, session, role guards
+- /lib/rbac/ — permission matrix, role checks, middleware
+- /components/ — reusable UI components
+- /components/brand/ — BrandLogo component with dark mode switching
+- /prisma/ — schema & migrations
+- /public/brand/ — ALL logo files (SVG + PNG, see BRAND ASSETS section above)
+- /public/manifest.json — PWA manifest referencing brand icons
+
+RBAC MIDDLEWARE (CRITICAL — implement before any page):
+```typescript
+// /lib/rbac/permissions.ts
+// Every API route and page MUST check:
+// 1. Is user authenticated?
+// 2. Does user's role have permission for this action?
+// 3. Is user accessing data within their org? (tenant isolation)
+// 4. Is user accessing data within their branch? (branch scoping)
+
+// Example middleware:
+function requireRole(...roles: Role[]) {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role)) return res.status(403);
+    if (req.user.role !== 'super_admin' && req.params.orgId !== req.user.orgId)
+      return res.status(403); // tenant isolation
+    next();
+  };
+}
+```
+
+IMPORTANT: Before building any page, first set up the /public/brand/ directory with all logo files and create the reusable <BrandLogo /> component. Every page header, login screen, visitor pass, email template, and PDF report must use the official brand assets — never hardcode text as a logo substitute.
+
+Build this step by step in this order:
+1. Database schema (ALL entities including Organizations, Branches, Users, Invitations, Visitors, Visit Requests, Audit Log)
+2. Auth system: login, JWT sessions, password hashing, 2FA setup
+3. RBAC middleware: role guards, tenant isolation, branch scoping — enforce on EVERY route before building pages
+4. Super Admin portal: create org, onboard first Org Admin, org management, platform dashboard
+5. Invitation system: generate token, send email/SMS, accept invitation, set password, handle expiry/resend/revoke
+6. Org Admin setup wizard: complete org profile, set verification policy, create first branch, invite first users
+7. User management: invite users, assign roles/branches, deactivate/reactivate, password reset
+8. Branch management: create, edit, assign entry mode, override verification policy
+9. Core visit request flow: both paths (pre-registered + walk-in), approval queue, Telegram approval
+10. QR system: generate, scan, validate, one-time-use, expiry
+11. Verification: Nafath + OTP configurable flow with org policy engine
+12. Role-based dashboards: Super Admin → Org Admin → Visitor Manager → Receptionist → Host Employee
+13. Unmanned entry mode: all 4 methods
+14. Telegram bot integration
+15. Reports & analytics
+16. Public booking page, kiosk mode
+Prioritize working role hierarchy and security over polish — the RBAC system is the backbone of everything.
+```
+
+---

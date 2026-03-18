@@ -1,0 +1,57 @@
+modules = ["nodejs-24", "postgresql-16"]
+
+[[artifacts]]
+id = "artifacts/api-server"
+
+[[artifacts]]
+id = "artifacts/mockup-sandbox"
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=8080 pnpm --filter @workspace/api-server run dev & PORT=20853 BASE_PATH=/ pnpm --filter @workspace/ventry run dev"
+waitForPort = 20853
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+packages = ["psmisc"]
+
+[userenv]
+
+[userenv.shared]
+TELEGRAM_BOT_TOKEN = "8726287953:AAGRvy7Q2mS9Uk2oqxOpSxrO4qKi_AC0h2s"
+AUTHENTICA_API_KEY = "$2y$10$IKrQ05kbVZH1oR0ZSz2uQue6OiqeGKPQoVWpKh1qd2iX7CoVNAyEm"

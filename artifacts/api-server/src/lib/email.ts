@@ -128,9 +128,9 @@ export function buildPasswordResetEmail({
 }
 
 export function buildVisitApprovedEmail({
-  visitorName, organizationName, scheduledDate, scheduledTime, passLink,
+  visitorName, organizationName, scheduledDate, scheduledTime, passLink, qrCode,
 }: {
-  visitorName: string; organizationName: string; scheduledDate: string; scheduledTime?: string; passLink: string;
+  visitorName: string; organizationName: string; scheduledDate: string; scheduledTime?: string; passLink: string; qrCode?: string;
 }): string {
   return `
     <!DOCTYPE html>
@@ -155,6 +155,15 @@ export function buildVisitApprovedEmail({
               View Entry Pass &amp; QR Code
             </a>
           </div>
+          ${qrCode ? `
+          <div style="text-align: center; margin: 20px 0 0;">
+            <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrCode)}" alt="QR Code" style="width: 180px; height: 180px; border-radius: 12px; border: 2px solid #e2e8f0;" />
+          </div>
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; text-align: center; margin: 16px 0 0;">
+            <p style="margin: 0 0 4px; color: #94a3b8; font-size: 12px;">Manual Entry Code (if camera unavailable)</p>
+            <p style="margin: 0; font-family: 'Courier New', monospace; font-size: 18px; font-weight: 700; color: #1e293b; letter-spacing: 2px;">${qrCode}</p>
+          </div>
+          ` : ""}
         </div>
         <div style="background: #f8fafc; padding: 16px 32px; text-align: center; border-top: 1px solid #e2e8f0;">
           <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; ${new Date().getFullYear()} Availo Ventry &mdash; Powered by T2</p>

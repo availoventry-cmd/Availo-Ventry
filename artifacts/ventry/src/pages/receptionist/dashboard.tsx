@@ -83,7 +83,7 @@ export default function ReceptionistDashboard() {
                 <div className="w-full max-w-sm space-y-2">
                   <Input 
                     autoFocus
-                    placeholder="Scan or type QR token here..." 
+                    placeholder="Scan QR code or type manual entry code..." 
                     className="text-center h-12 text-lg tracking-widest bg-slate-50 rounded-xl"
                     value={qrCode}
                     onChange={(e) => setQrCode(e.target.value)}

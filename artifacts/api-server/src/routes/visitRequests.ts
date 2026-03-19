@@ -220,6 +220,7 @@ router.patch("/:requestId/approve", requireAuth, requireOrgAccess, requirePermis
           scheduledDate: enriched.scheduledDate,
           scheduledTime: enriched.scheduledTimeFrom || undefined,
           passLink,
+          qrCode: enriched.qrCode || undefined,
         }),
       }).catch(console.error);
     }

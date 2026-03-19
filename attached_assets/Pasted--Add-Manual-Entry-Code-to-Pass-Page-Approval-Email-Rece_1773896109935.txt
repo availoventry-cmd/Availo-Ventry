@@ -1,0 +1,96 @@
+# Add Manual Entry Code to Pass Page, Approval Email & Receptionist Console
+
+## Overview
+When a camera is broken or unavailable at the reception desk, the visitor needs to read their entry code to the receptionist who types it manually. The Desk Console already supports typing codes. We just need to DISPLAY the code to the visitor in 3 places.
+
+---
+
+## FIX 1: Show Manual Entry Code Under QR on Visitor Pass Page
+
+In `artifacts/ventry/src/pages/public/pass.tsx`, find the QR code section (the block that checks `passData.status === "approved" && passData.qrCodeData`). Replace it with:
+
+```tsx
+{passData.status === "approved" && passData.qrCodeData && (
+  <div className="p-6 bg-white text-center">
+    <div className="inline-block p-4 bg-white rounded-2xl shadow-md border border-slate-100">
+      <img
+        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(passData.qrCodeData)}`}
+        alt="Entry QR Code"
+        className="w-48 h-48 mx-auto"
+      />
+    </div>
+    <p className="text-xs text-muted-foreground mt-3">Scan this code at the reception desk</p>
+    
+    {/* Manual Entry Code */}
+    <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
+      <p className="text-xs text-muted-foreground mb-1">Manual Entry Code</p>
+      <p className="font-mono font-bold text-lg tracking-wider text-foreground select-all">{passData.qrCodeData}</p>
+      <p className="text-xs text-slate-400 mt-1">If camera is unavailable, provide this code to the receptionist</p>
+    </div>
+  </div>
+)}
+```
+
+---
+
+## FIX 2: Add QR Image + Manual Code to Approval Email
+
+In `artifacts/api-server/src/lib/email.ts`, update the `buildVisitApprovedEmail` function:
+
+### 2a. Add `qrCode` parameter
+
+Change the function signature from:
+```typescript
+export function buildVisitApprovedEmail({
+  visitorName, organizationName, scheduledDate, scheduledTime, passLink,
+}: {
+  visitorName: string; organizationName: string; scheduledDate: string; scheduledTime?: string; passLink: string;
+```
+to:
+```typescript
+export function buildVisitApprovedEmail({
+  visitorName, organizationName, scheduledDate, scheduledTime, passLink, qrCode,
+}: {
+  visitorName: string; organizationName: string; scheduledDate: string; scheduledTime?: string; passLink: string; qrCode?: string;
+```
+
+### 2b. Add QR image and manual code to the HTML
+
+In the email HTML template, AFTER the "View Entry Pass & QR Code" button link and its closing `</div>`, add:
+
+```html
+${qrCode ? `
+  <div style="text-align: center; margin: 20px 0 0;">
+    <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrCode)}" alt="QR Code" style="width: 180px; height: 180px; border-radius: 12px; border: 2px solid #e2e8f0;" />
+  </div>
+  <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; text-align: center; margin: 16px 0 0;">
+    <p style="margin: 0 0 4px; color: #94a3b8; font-size: 12px;">Manual Entry Code (if camera unavailable)</p>
+    <p style="margin: 0; font-family: 'Courier New', monospace; font-size: 18px; font-weight: 700; color: #1e293b; letter-spacing: 2px;">${qrCode}</p>
+  </div>
+` : ""}
+```
+
+---
+
+## FIX 3: Update Receptionist Desk Console Placeholder
+
+In `artifacts/ventry/src/pages/receptionist/dashboard.tsx`, find the scanner input placeholder text. Change it from:
+```
+"Scan or type QR token here..."
+```
+to:
+```
+"Scan QR code or type manual entry code..."
+```
+
+---
+
+## Files to Modify
+- `artifacts/ventry/src/pages/public/pass.tsx` — Add manual entry code box under QR
+- `artifacts/api-server/src/lib/email.ts` — Add qrCode param, QR image + manual code in approval email
+- `artifacts/ventry/src/pages/receptionist/dashboard.tsx` — Update placeholder text
+
+## Test
+1. Approve a visit request → open the pass page → QR code should have a "Manual Entry Code" box below it with the code text
+2. Check the approval email → should contain QR image + manual code section
+3. Copy the manual code → go to Desk Console → paste it in the input → should verify the visitor

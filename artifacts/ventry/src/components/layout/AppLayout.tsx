@@ -64,19 +64,23 @@ export function AppLayout({ children }: { children: ReactNode }) {
           items.push({ title: "My Visitors", url: "/host", icon: UserSquare2 });
           items.push({ title: "New Request", url: "/host/new", icon: CalendarCheck });
         }
-        if (user.role === "visitor_manager") {
+        if (hasPermission("dashboard.view") && user.role !== "receptionist" && user.role !== "host_employee") {
           items.push({ title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard });
         }
         if (hasAnyPermission("visit_requests.view", "visit_requests.approve", "visit_requests.create", "visit_requests.check_in")) {
-          if (user.role !== "host_employee") {
-            items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
-          }
+          items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
         }
         if (hasPermission("visitors.view")) {
           items.push({ title: "Visitors", url: "/portal/visitors", icon: Users });
         }
         if (hasPermission("roles.view")) {
           items.push({ title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck });
+        }
+        if (hasPermission("settings.view")) {
+          items.push({ title: "Settings", url: "/portal/settings", icon: Settings });
+        }
+        if (hasPermission("telegram.manage")) {
+          items.push({ title: "Telegram Bot", url: "/settings/telegram", icon: Send });
         }
         return items;
       }

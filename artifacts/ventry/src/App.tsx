@@ -112,18 +112,18 @@ function Router() {
         {() => <ProtectedRoute component={SuperAdminAnalytics} allowedRoles={['super_admin']} />}
       </Route>
       
-      {/* Portal Routes (Org Admin / Visitor Manager) */}
+      {/* Portal Routes — permission-based access */}
       <Route path="/portal/dashboard">
-        {() => <ProtectedRoute component={PortalDashboard} allowedRoles={['org_admin', 'visitor_manager']} />}
+        {() => <ProtectedRoute component={PortalDashboard} requiredPermission="dashboard.view" />}
       </Route>
       <Route path="/portal/visit-requests">
-        {() => <ProtectedRoute component={VisitRequests} allowedRoles={['org_admin', 'visitor_manager', 'receptionist', 'host_employee']} />}
+        {() => <ProtectedRoute component={VisitRequests} requiredPermission="visit_requests.view" />}
       </Route>
       <Route path="/portal/visitors">
-        {() => <ProtectedRoute component={PortalVisitors} allowedRoles={['org_admin', 'visitor_manager']} />}
+        {() => <ProtectedRoute component={PortalVisitors} requiredPermission="visitors.view" />}
       </Route>
       <Route path="/portal/settings">
-        {() => <ProtectedRoute component={PortalSettings} allowedRoles={['org_admin']} />}
+        {() => <ProtectedRoute component={PortalSettings} requiredPermission="settings.view" />}
       </Route>
       <Route path="/portal/roles">
         {() => <ProtectedRoute component={PortalRoles} requiredPermission="roles.view" />}
@@ -144,7 +144,7 @@ function Router() {
 
       {/* Settings */}
       <Route path="/settings/telegram">
-        {() => <ProtectedRoute component={TelegramSettings} />}
+        {() => <ProtectedRoute component={TelegramSettings} requiredPermission="telegram.manage" />}
       </Route>
       
       <Route component={NotFound} />

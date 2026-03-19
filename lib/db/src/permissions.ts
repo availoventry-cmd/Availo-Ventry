@@ -21,6 +21,7 @@ export const ALL_PERMISSIONS = {
   "settings.manage": "Edit organization settings",
   "roles.view": "View roles",
   "roles.manage": "Create, edit, and delete custom roles",
+  "invitations.manage": "Send and revoke invitations",
   "telegram.manage": "Manage Telegram bot settings",
   "public_booking.manage": "Manage public booking page settings",
 } as const;
@@ -31,11 +32,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, Permission[]> = {
   visitor_manager: [
     "dashboard.view",
     "visit_requests.view", "visit_requests.create", "visit_requests.approve",
+    "visit_requests.check_in", "visit_requests.check_out",
     "visitors.view", "visitors.manage",
     "blacklist.view", "blacklist.manage",
     "reports.view",
     "audit_logs.view",
     "notifications.view", "notifications.manage",
+    "invitations.manage",
     "telegram.manage",
   ],
   receptionist: [

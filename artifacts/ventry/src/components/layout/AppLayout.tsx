@@ -67,7 +67,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         if (user.role === "visitor_manager") {
           items.push({ title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard });
         }
-        if (hasAnyPermission("visit_requests.view", "visit_requests.manage", "visit_requests.create", "visit_requests.checkin")) {
+        if (hasAnyPermission("visit_requests.view", "visit_requests.approve", "visit_requests.create", "visit_requests.check_in")) {
           if (user.role !== "host_employee") {
             items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
           }

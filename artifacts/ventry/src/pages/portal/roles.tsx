@@ -27,12 +27,12 @@ async function apiFetch<T = unknown>(path: string, options?: RequestInit): Promi
   return res.json() as Promise<T>;
 }
 
-const PERMISSION_GROUPS = {
+const PERMISSION_GROUPS: Record<string, { key: string; label: string }[]> = {
   "Visit Requests": [
     { key: "visit_requests.view", label: "View Visit Requests" },
     { key: "visit_requests.create", label: "Create Visit Requests" },
-    { key: "visit_requests.manage", label: "Approve / Reject Requests" },
-    { key: "visit_requests.checkin", label: "Check In / Out Visitors" },
+    { key: "visit_requests.approve", label: "Approve / Reject Requests" },
+    { key: "visit_requests.check_in", label: "Check In / Out Visitors" },
   ],
   "Visitors": [
     { key: "visitors.view", label: "View Visitors" },
@@ -48,20 +48,23 @@ const PERMISSION_GROUPS = {
   "Organization": [
     { key: "branches.view", label: "View Branches" },
     { key: "branches.manage", label: "Manage Branches" },
+    { key: "settings.view", label: "View Settings" },
     { key: "settings.manage", label: "Manage Settings" },
   ],
   "Reports & Logs": [
+    { key: "dashboard.view", label: "View Dashboard" },
     { key: "reports.view", label: "View Reports" },
     { key: "audit_logs.view", label: "View Audit Logs" },
-    { key: "dashboard.view", label: "View Dashboard" },
   ],
   "Roles": [
     { key: "roles.view", label: "View Roles & Permissions" },
     { key: "roles.manage", label: "Manage Roles & Permissions" },
   ],
-  "Notifications": [
+  "Notifications & Integrations": [
     { key: "notifications.view", label: "View Notifications" },
     { key: "notifications.manage", label: "Manage Notification Settings" },
+    { key: "telegram.manage", label: "Manage Telegram Bot" },
+    { key: "public_booking.manage", label: "Manage Public Booking Page" },
   ],
 };
 
@@ -77,6 +80,35 @@ interface Role {
   permissionCount: number;
   userCount: number;
   permissions?: string[];
+}
+
+interface PermissionSelectorProps {
+  selectedPerms: Set<string>;
+  onToggle: (key: string) => void;
+}
+
+function PermissionSelector({ selectedPerms, onToggle }: PermissionSelectorProps) {
+  return (
+    <div className="space-y-4 max-h-80 overflow-y-auto pr-1">
+      {Object.entries(PERMISSION_GROUPS).map(([group, perms]) => (
+        <div key={group}>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{group}</p>
+          <div className="space-y-1.5 ml-1">
+            {perms.map(p => (
+              <div key={p.key} className="flex items-center gap-2">
+                <Checkbox
+                  id={p.key}
+                  checked={selectedPerms.has(p.key)}
+                  onCheckedChange={() => onToggle(p.key)}
+                />
+                <label htmlFor={p.key} className="text-sm cursor-pointer">{p.label}</label>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function PortalRoles() {
@@ -136,11 +168,16 @@ export default function PortalRoles() {
     setSelectedPerms(new Set());
   };
 
-  const openEdit = async (role: Role) => {
-    const detailed = await apiFetch<Role>(`/api/organizations/${orgId}/roles/${role.id}`);
-    setEditingRole(detailed);
-    setForm({ name: detailed.name, slug: detailed.slug, description: detailed.description || "" });
-    setSelectedPerms(new Set(detailed.permissions ?? []));
+  const openEdit = (role: Role) => {
+    apiFetch<Role>(`/api/organizations/${orgId}/roles/${role.id}`)
+      .then((detailed) => {
+        setEditingRole(detailed);
+        setForm({ name: detailed.name, slug: detailed.slug, description: detailed.description || "" });
+        setSelectedPerms(new Set(detailed.permissions ?? []));
+      })
+      .catch((e: Error) => {
+        toast({ title: "Failed to load role", description: e.message, variant: "destructive" });
+      });
   };
 
   const togglePerm = (key: string) => {
@@ -161,27 +198,11 @@ export default function PortalRoles() {
     }
   };
 
-  const PermissionSelector = () => (
-    <div className="space-y-4 max-h-80 overflow-y-auto pr-1">
-      {Object.entries(PERMISSION_GROUPS).map(([group, perms]) => (
-        <div key={group}>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{group}</p>
-          <div className="space-y-1.5 ml-1">
-            {perms.map(p => (
-              <div key={p.key} className="flex items-center gap-2">
-                <Checkbox
-                  id={p.key}
-                  checked={selectedPerms.has(p.key)}
-                  onCheckedChange={() => togglePerm(p.key)}
-                />
-                <label htmlFor={p.key} className="text-sm cursor-pointer">{p.label}</label>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  const closeCreateEdit = () => {
+    setShowCreate(false);
+    setEditingRole(null);
+    resetForm();
+  };
 
   return (
     <div className="space-y-6">
@@ -248,8 +269,7 @@ export default function PortalRoles() {
         </div>
       )}
 
-      {/* Create / Edit Dialog */}
-      <Dialog open={showCreate || !!editingRole} onOpenChange={(open) => { if (!open) { setShowCreate(false); setEditingRole(null); resetForm(); } }}>
+      <Dialog open={showCreate || !!editingRole} onOpenChange={(open) => { if (!open) closeCreateEdit(); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingRole ? "Edit Role" : "Create New Role"}</DialogTitle>
@@ -280,12 +300,12 @@ export default function PortalRoles() {
             </div>
             <div className="space-y-2">
               <Label>Permissions</Label>
-              <PermissionSelector />
+              <PermissionSelector selectedPerms={selectedPerms} onToggle={togglePerm} />
               <p className="text-xs text-muted-foreground">{selectedPerms.size} permission{selectedPerms.size !== 1 ? "s" : ""} selected</p>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setShowCreate(false); setEditingRole(null); resetForm(); }}>Cancel</Button>
+            <Button variant="outline" onClick={closeCreateEdit}>Cancel</Button>
             <Button onClick={handleSave} disabled={!form.name || createMutation.isPending || updateMutation.isPending}>
               {editingRole ? "Save Changes" : "Create Role"}
             </Button>
@@ -293,7 +313,6 @@ export default function PortalRoles() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
       <Dialog open={!!deletingRole} onOpenChange={(open) => { if (!open) setDeletingRole(null); }}>
         <DialogContent>
           <DialogHeader>

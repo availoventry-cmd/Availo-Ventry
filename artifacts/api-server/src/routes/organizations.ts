@@ -241,8 +241,7 @@ router.put("/:orgId", requireAuth, async (req, res) => {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     for (const field of allowedFields) {
       if (field in req.body) {
-        const dbField = field.replace(/([A-Z])/g, "_$1").toLowerCase() as keyof typeof updates;
-        updates[dbField] = req.body[field];
+        updates[field] = req.body[field];
       }
     }
 
@@ -251,7 +250,7 @@ router.put("/:orgId", requireAuth, async (req, res) => {
       const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
       if (orgs[0]?.status === "pending_setup") {
         (updates as Record<string, unknown>).status = "active";
-        (updates as Record<string, unknown>).activated_at = new Date();
+        (updates as Record<string, unknown>).activatedAt = new Date();
       }
     }
 
@@ -272,13 +271,13 @@ router.patch("/:orgId/status", requireAuth, requireRole("super_admin"), async (r
 
     const updates: Record<string, unknown> = { status, updatedAt: new Date() };
     if (status === "suspended") {
-      updates.suspension_reason = reason;
-      updates.suspended_at = new Date();
+      updates.suspensionReason = reason;
+      updates.suspendedAt = new Date();
     } else if (status === "active") {
-      updates.suspension_reason = null;
-      updates.activated_at = new Date();
+      updates.suspensionReason = null;
+      updates.activatedAt = new Date();
     } else if (status === "deactivated") {
-      updates.deactivated_at = new Date();
+      updates.deactivatedAt = new Date();
     }
 
     await db.update(organizationsTable).set(updates as Partial<typeof organizationsTable.$inferInsert>).where(eq(organizationsTable.id, orgId));
@@ -345,38 +344,67 @@ router.post("/:orgId/resend-admin-invite", requireAuth, requireRole("super_admin
       ))
       .limit(1);
 
-    if (!invitations[0]) {
-      res.status(404).json({ error: "No pending admin invitation found" });
-      return;
+    if (invitations[0]) {
+      const inv = invitations[0];
+      const newToken = generateToken();
+      await db.update(invitationsTable).set({
+        invitationToken: newToken,
+        tokenExpiresAt: addDays(new Date(), 3),
+        resendCount: inv.resendCount + 1,
+        lastResentAt: new Date(),
+      }).where(eq(invitationsTable.id, inv.id));
+
+      const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      const baseUrl = getBaseUrl(req);
+      const invitationLink = `${baseUrl}/accept-invitation?token=${newToken}`;
+
+      await sendEmail({
+        to: inv.email,
+        subject: `Reminder: You're invited to manage ${org?.name || "an organization"} on Availo Ventry`,
+        html: buildInvitationEmail({
+          recipientName: inv.name,
+          organizationName: org?.name || "an organization",
+          role: "org_admin",
+          invitationLink,
+          expiresInDays: 3,
+        }),
+      });
+
+      res.json({ success: true, message: "Admin invitation resent", invitationLink });
+    } else {
+      const adminUsers = await db.select().from(usersTable)
+        .where(and(eq(usersTable.orgId, orgId), eq(usersTable.role, "org_admin")))
+        .limit(1);
+
+      if (adminUsers[0]) {
+        const admin = adminUsers[0];
+        const resetToken = generateToken(32);
+
+        await db.update(usersTable).set({
+          passwordResetToken: resetToken,
+          passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),
+        }).where(eq(usersTable.id, admin.id));
+
+        const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+        const baseUrl = getBaseUrl(req);
+        const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+
+        const { buildPasswordResetEmail } = await import("../lib/email.js");
+        await sendEmail({
+          to: admin.email,
+          subject: `Access your ${org?.name || "organization"} admin account on Availo Ventry`,
+          html: buildPasswordResetEmail({
+            recipientName: admin.name,
+            resetLink,
+            expiresInMinutes: 30,
+          }),
+        });
+
+        res.json({ success: true, message: "Password reset email sent to admin" });
+      } else {
+        res.status(404).json({ error: "No admin found or invited for this organization" });
+      }
     }
-
-    const inv = invitations[0];
-    const newToken = generateToken();
-
-    await db.update(invitationsTable).set({
-      invitationToken: newToken,
-      tokenExpiresAt: addDays(new Date(), 3),
-      resendCount: inv.resendCount + 1,
-      lastResentAt: new Date(),
-    }).where(eq(invitationsTable.id, inv.id));
-
-    const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
-    const baseUrl = getBaseUrl(req);
-    const invitationLink = `${baseUrl}/accept-invitation?token=${newToken}`;
-
-    await sendEmail({
-      to: inv.email,
-      subject: `Reminder: You're invited to manage ${org?.name || "an organization"} on Availo Ventry`,
-      html: buildInvitationEmail({
-        recipientName: inv.name,
-        organizationName: org?.name || "an organization",
-        role: "org_admin",
-        invitationLink,
-        expiresInDays: 3,
-      }),
-    });
-
-    res.json({ success: true, message: "Admin invitation resent", invitationLink });
   } catch (err) {
     console.error("Resend admin invite error:", err);
     res.status(500).json({ error: "Internal Server Error" });

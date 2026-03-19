@@ -76,13 +76,13 @@ router.put("/:branchId", requireAuth, requireOrgAccess, requirePermission("branc
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (name !== undefined) updates.name = name;
-    if (nameAr !== undefined) updates.name_ar = nameAr;
+    if (nameAr !== undefined) updates.nameAr = nameAr;
     if (address !== undefined) updates.address = address;
     if (city !== undefined) updates.city = city;
-    if (entryMode !== undefined) updates.entry_mode = entryMode;
-    if (verificationPolicyOverride !== undefined) updates.verification_policy_override = verificationPolicyOverride;
-    if (maxConcurrentVisitors !== undefined) updates.max_concurrent_visitors = maxConcurrentVisitors;
-    if (isActive !== undefined) updates.is_active = isActive;
+    if (entryMode !== undefined) updates.entryMode = entryMode;
+    if (verificationPolicyOverride !== undefined) updates.verificationPolicyOverride = verificationPolicyOverride;
+    if (maxConcurrentVisitors !== undefined) updates.maxConcurrentVisitors = maxConcurrentVisitors;
+    if (isActive !== undefined) updates.isActive = isActive;
 
     await db.update(branchesTable)
       .set(updates as Partial<typeof branchesTable.$inferInsert>)

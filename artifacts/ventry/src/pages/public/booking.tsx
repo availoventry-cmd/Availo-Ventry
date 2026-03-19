@@ -121,8 +121,8 @@ export default function PublicBooking() {
 
                 <FormField control={form.control} name="companyName" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Representing Company</FormLabel>
-                    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="Company Name" {...field} /></FormControl>
+                    <FormLabel className="font-semibold text-slate-700">Your Company</FormLabel>
+                    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="e.g. Saudi Aramco, STC..." {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />

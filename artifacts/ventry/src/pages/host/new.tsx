@@ -132,8 +132,8 @@ export default function HostNewRequest() {
                   )} />
                   <FormField control={form.control} name="visitorCompany" render={({ field }) => (
                     <FormItem className="sm:col-span-2">
-                      <FormLabel>Company / Organization</FormLabel>
-                      <FormControl><Input className="h-11 rounded-xl" placeholder="Company name" {...field} /></FormControl>
+                      <FormLabel>Visitor's Company</FormLabel>
+                      <FormControl><Input className="h-11 rounded-xl" placeholder="e.g. Saudi Aramco, STC..." {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />

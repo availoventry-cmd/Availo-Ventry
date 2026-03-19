@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, Search, Plus, CheckCircle2, Ban, RefreshCw, MoreHorizontal, Pencil, Users, Mail } from "lucide-react";
+import { Building2, Search, Plus, CheckCircle2, Ban, RefreshCw, MoreHorizontal, Pencil, Users, Mail, Eye, EyeOff } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -40,6 +40,7 @@ export default function SuperAdminOrganizations() {
     firstAdminPassword: "",
   });
 
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editOrg, setEditOrg] = useState<any>(null);
   const [editForm, setEditForm] = useState({
@@ -361,8 +362,13 @@ export default function SuperAdminOrganizations() {
               {form.adminSetupMode === "direct" && (
                 <div className="space-y-1.5 mt-3">
                   <Label>Admin Password *</Label>
-                  <Input type="password" placeholder="Minimum 8 characters" className="rounded-xl"
-                    value={form.firstAdminPassword} onChange={e => setForm(f => ({ ...f, firstAdminPassword: e.target.value }))} />
+                  <div className="relative">
+                    <Input type={showAdminPassword ? "text" : "password"} placeholder="Minimum 8 characters" className="rounded-xl pr-12"
+                      value={form.firstAdminPassword} onChange={e => setForm(f => ({ ...f, firstAdminPassword: e.target.value }))} />
+                    <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors" onClick={() => setShowAdminPassword(!showAdminPassword)} tabIndex={-1}>
+                      {showAdminPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

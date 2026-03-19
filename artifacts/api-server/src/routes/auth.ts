@@ -67,6 +67,24 @@ router.post("/login", async (req, res) => {
       return;
     }
 
+    if (user.orgId && user.role !== "super_admin") {
+      const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
+      if (org) {
+        if (org.status === "suspended") {
+          res.status(403).json({ error: "Forbidden", message: "Your organization has been suspended. Please contact the administrator." });
+          return;
+        }
+        if (org.status === "deactivated") {
+          res.status(403).json({ error: "Forbidden", message: "Your organization has been deactivated." });
+          return;
+        }
+        if (org.status === "pending_setup" && user.role !== "org_admin") {
+          res.status(403).json({ error: "Forbidden", message: "Your organization is not yet active. Please wait for the admin to complete setup." });
+          return;
+        }
+      }
+    }
+
     await db.update(usersTable)
       .set({ lastLoginAt: new Date(), lastActiveAt: new Date(), loginCount: (user.loginCount || 0) + 1 })
       .where(eq(usersTable.id, user.id));

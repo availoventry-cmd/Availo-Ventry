@@ -85,12 +85,12 @@ router.put("/:userId", requireAuth, requireOrgAccess, requirePermission("users.m
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (name !== undefined) updates.name = name;
-    if (nameAr !== undefined) updates.name_ar = nameAr;
+    if (nameAr !== undefined) updates.nameAr = nameAr;
     if (phone !== undefined) updates.phone = phone;
     if (role !== undefined) updates.role = role;
-    if (branchId !== undefined) updates.branch_id = branchId;
+    if (branchId !== undefined) updates.branchId = branchId;
     if (department !== undefined) updates.department = department;
-    if (jobTitle !== undefined) updates.job_title = jobTitle;
+    if (jobTitle !== undefined) updates.jobTitle = jobTitle;
 
     await db.update(usersTable)
       .set(updates as Partial<typeof usersTable.$inferInsert>)

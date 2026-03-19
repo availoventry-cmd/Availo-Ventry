@@ -7,10 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Save, Plus, UserPlus, Building2, Settings, Users, MoreHorizontal } from "lucide-react";
+import { Save, Plus, UserPlus, Building2, Settings, Users, MoreHorizontal, RotateCcw } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 export default function PortalSettings() {
@@ -28,8 +29,16 @@ export default function PortalSettings() {
 
   const [orgForm, setOrgForm] = useState({ name: "", nameAr: "", address: "", primaryContactName: "", primaryContactEmail: "", primaryContactPhone: "" });
   const [inviteDialog, setInviteDialog] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ name: "", email: "", role: "visitor_manager", department: "", jobTitle: "" });
+  const [inviteForm, setInviteForm] = useState({ name: "", email: "", role: "visitor_manager", department: "", jobTitle: "", branchId: "" });
   const [activeTab, setActiveTab] = useState<"general" | "users" | "branches">("general");
+
+  const [branchDialog, setBranchDialog] = useState(false);
+  const [editingBranch, setEditingBranch] = useState<any>(null);
+  const [branchForm, setBranchForm] = useState({
+    name: "", nameAr: "", address: "", city: "", branchCode: "", entryMode: "staffed", maxConcurrentVisitors: 50,
+  });
+
+  const [confirmAction, setConfirmAction] = useState<{ type: "deactivate" | "reactivate"; userId: string; userName: string } | null>(null);
 
   useEffect(() => {
     if (org) {
@@ -60,10 +69,12 @@ export default function PortalSettings() {
       return;
     }
     try {
-      await inviteMutation.mutateAsync({ orgId: user!.orgId!, data: inviteForm });
+      const payload: any = { ...inviteForm };
+      if (!payload.branchId) delete payload.branchId;
+      await inviteMutation.mutateAsync({ orgId: user!.orgId!, data: payload });
       toast({ title: "Invitation Sent", description: `${inviteForm.name} has been invited as ${inviteForm.role.replace("_", " ")}.` });
       setInviteDialog(false);
-      setInviteForm({ name: "", email: "", role: "visitor_manager", department: "", jobTitle: "" });
+      setInviteForm({ name: "", email: "", role: "visitor_manager", department: "", jobTitle: "", branchId: "" });
       queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/users`] });
     } catch {
       toast({ title: "Invite Failed", variant: "destructive" });
@@ -80,14 +91,94 @@ export default function PortalSettings() {
     }
   };
 
+  const handleReactivate = async (userId: string, userName: string) => {
+    try {
+      const res = await fetch(`/api/organizations/${user!.orgId}/users/${userId}/reactivate`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed");
+      toast({ title: "User Reactivated", description: `${userName} has been reactivated.` });
+      queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/users`] });
+    } catch {
+      toast({ title: "Action Failed", variant: "destructive" });
+    }
+  };
+
+  const handleConfirmAction = () => {
+    if (!confirmAction) return;
+    if (confirmAction.type === "deactivate") {
+      handleDeactivate(confirmAction.userId, confirmAction.userName);
+    } else {
+      handleReactivate(confirmAction.userId, confirmAction.userName);
+    }
+    setConfirmAction(null);
+  };
+
+  const openBranchDialog = (branch?: any) => {
+    if (branch) {
+      setEditingBranch(branch);
+      setBranchForm({
+        name: branch.name || "", nameAr: branch.nameAr || "", address: branch.address || "",
+        city: branch.city || "", branchCode: branch.branchCode || "", entryMode: branch.entryMode || "staffed",
+        maxConcurrentVisitors: branch.maxConcurrentVisitors || 50,
+      });
+    } else {
+      setEditingBranch(null);
+      setBranchForm({ name: "", nameAr: "", address: "", city: "", branchCode: "", entryMode: "staffed", maxConcurrentVisitors: 50 });
+    }
+    setBranchDialog(true);
+  };
+
+  const handleSaveBranch = async () => {
+    if (!branchForm.name || !branchForm.branchCode) {
+      toast({ title: "Missing fields", description: "Branch name and code are required.", variant: "destructive" });
+      return;
+    }
+    try {
+      if (editingBranch) {
+        const res = await fetch(`/api/organizations/${user!.orgId}/branches/${editingBranch.id}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+          body: JSON.stringify(branchForm),
+        });
+        if (!res.ok) throw new Error("Failed");
+        toast({ title: "Branch Updated" });
+      } else {
+        const res = await fetch(`/api/organizations/${user!.orgId}/branches`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+          body: JSON.stringify(branchForm),
+        });
+        if (!res.ok) throw new Error("Failed");
+        toast({ title: "Branch Created" });
+      }
+      setBranchDialog(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/branches`] });
+    } catch {
+      toast({ title: "Failed", variant: "destructive" });
+    }
+  };
+
+  const handleToggleBranch = async (branch: any) => {
+    try {
+      const res = await fetch(`/api/organizations/${user!.orgId}/branches/${branch.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ isActive: !branch.isActive }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      toast({ title: branch.isActive ? "Branch Deactivated" : "Branch Activated" });
+      queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/branches`] });
+    } catch {
+      toast({ title: "Failed", variant: "destructive" });
+    }
+  };
+
   const tabs = [
     { id: "general", label: "General", icon: Settings },
     { id: "users", label: "Users", icon: Users },
     { id: "branches", label: "Branches", icon: Building2 },
   ] as const;
 
-  const users = usersData?.data ?? [];
-  const branches = branchesData?.data ?? [];
+  const allUsers = (usersData as any)?.data ?? usersData ?? [];
+  const branches = (branchesData as any)?.data ?? branchesData ?? [];
 
   const roleColor: Record<string, string> = {
     org_admin: "bg-violet-100 text-violet-700",
@@ -103,7 +194,6 @@ export default function PortalSettings() {
         <p className="text-muted-foreground mt-1">Manage your organization, users, and branches.</p>
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit">
         {tabs.map(tab => (
           <button
@@ -117,7 +207,6 @@ export default function PortalSettings() {
         ))}
       </div>
 
-      {/* General Tab */}
       {activeTab === "general" && (
         <Card className="border-border/50 shadow-sm rounded-2xl">
           <CardHeader>
@@ -165,7 +254,6 @@ export default function PortalSettings() {
         </Card>
       )}
 
-      {/* Users Tab */}
       {activeTab === "users" && (
         <div className="space-y-4">
           <div className="flex justify-end">
@@ -183,15 +271,16 @@ export default function PortalSettings() {
                     <th className="text-left p-4 font-semibold text-slate-600">Email</th>
                     <th className="text-left p-4 font-semibold text-slate-600">Role</th>
                     <th className="text-left p-4 font-semibold text-slate-600">Status</th>
+                    <th className="text-left p-4 font-semibold text-slate-600">Last Login</th>
                     <th className="p-4 w-12"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {users.map(u => (
-                    <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
+                  {allUsers.map((u: any) => (
+                    <tr key={u.id} className={`hover:bg-slate-50/50 transition-colors ${!u.isActive ? "opacity-60" : ""}`}>
                       <td className="p-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center font-bold text-primary text-xs shrink-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${u.isActive ? "bg-primary/10 text-primary" : "bg-slate-200 text-slate-500"}`}>
                             {u.name.charAt(0)}
                           </div>
                           <span className="font-medium">{u.name}</span>
@@ -208,16 +297,25 @@ export default function PortalSettings() {
                           {u.isActive ? "Active" : "Inactive"}
                         </span>
                       </td>
+                      <td className="p-4 text-xs text-slate-500">
+                        {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"}
+                      </td>
                       <td className="p-4">
-                        {u.id !== user?.id && u.isActive && (
+                        {u.id !== user?.id && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg"><MoreHorizontal className="w-4 h-4" /></Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="rounded-xl">
-                              <DropdownMenuItem className="text-red-600 cursor-pointer" onClick={() => handleDeactivate(u.id, u.name)}>
-                                Deactivate
-                              </DropdownMenuItem>
+                              {u.isActive ? (
+                                <DropdownMenuItem className="text-red-600 cursor-pointer" onClick={() => setConfirmAction({ type: "deactivate", userId: u.id, userName: u.name })}>
+                                  Deactivate
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem className="text-emerald-600 cursor-pointer gap-2" onClick={() => setConfirmAction({ type: "reactivate", userId: u.id, userName: u.name })}>
+                                  <RotateCcw className="w-4 h-4" /> Reactivate
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         )}
@@ -231,37 +329,54 @@ export default function PortalSettings() {
         </div>
       )}
 
-      {/* Branches Tab */}
       {activeTab === "branches" && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {branches.map(b => (
-            <Card key={b.id} className="border-border/50 shadow-sm rounded-2xl">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                    <Building2 className="w-5 h-5 text-primary" />
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button className="gap-2 rounded-xl" onClick={() => openBranchDialog()}>
+              <Plus className="w-4 h-4" /> Add Branch
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {branches.map((b: any) => (
+              <Card key={b.id} className="border-border/50 shadow-sm rounded-2xl">
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                      <Building2 className="w-5 h-5 text-primary" />
+                    </div>
+                    <Badge className={`text-xs shadow-none border ${b.isActive ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600"}`}>
+                      {b.isActive ? "Active" : "Inactive"}
+                    </Badge>
                   </div>
-                  <Badge className={`text-xs shadow-none border ${b.isActive ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600"}`}>
-                    {b.isActive ? "Active" : "Inactive"}
-                  </Badge>
-                </div>
-                <h3 className="font-semibold text-foreground">{b.name}</h3>
-                {b.nameAr && <p className="text-xs text-muted-foreground">{b.nameAr}</p>}
-                <div className="mt-3 space-y-1 text-xs text-slate-500">
-                  <p>Code: <span className="font-mono font-medium text-foreground">{b.branchCode}</span></p>
-                  {b.city && <p>City: {b.city}</p>}
-                  <p className="capitalize">Mode: {b.entryMode}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {branches.length === 0 && (
-            <div className="col-span-3 p-12 text-center text-muted-foreground">No branches configured.</div>
-          )}
+                  <h3 className="font-semibold text-foreground">{b.name}</h3>
+                  {b.nameAr && <p className="text-xs text-muted-foreground">{b.nameAr}</p>}
+                  <div className="mt-3 space-y-1 text-xs text-slate-500">
+                    <p>Code: <span className="font-mono font-medium text-foreground">{b.branchCode}</span></p>
+                    {b.city && <p>City: {b.city}</p>}
+                    <p className="capitalize">Mode: {b.entryMode}</p>
+                  </div>
+                  <div className="flex gap-2 mt-4 pt-3 border-t">
+                    <Button variant="outline" size="sm" className="rounded-lg flex-1" onClick={() => openBranchDialog(b)}>Edit</Button>
+                    <Button variant={b.isActive ? "destructive" : "default"} size="sm" className="rounded-lg flex-1" onClick={() => handleToggleBranch(b)}>
+                      {b.isActive ? "Deactivate" : "Activate"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+            {branches.length === 0 && (
+              <div className="col-span-3 p-12 text-center text-muted-foreground">
+                <Building2 className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+                <p>No branches configured.</p>
+                <Button className="mt-4 rounded-xl gap-2" onClick={() => openBranchDialog()}>
+                  <Plus className="w-4 h-4" /> Add Your First Branch
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Invite Dialog */}
       <Dialog open={inviteDialog} onOpenChange={setInviteDialog}>
         <DialogContent className="rounded-2xl max-w-md">
           <DialogHeader>
@@ -279,17 +394,31 @@ export default function PortalSettings() {
                 <Input type="email" placeholder="email@org.sa" className="rounded-xl" value={inviteForm.email} onChange={e => setInviteForm(f => ({ ...f, email: e.target.value }))} />
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>Role *</Label>
-              <Select value={inviteForm.role} onValueChange={v => setInviteForm(f => ({ ...f, role: v }))}>
-                <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="org_admin">Org Admin</SelectItem>
-                  <SelectItem value="visitor_manager">Visitor Manager</SelectItem>
-                  <SelectItem value="receptionist">Receptionist</SelectItem>
-                  <SelectItem value="host_employee">Host Employee</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Role *</Label>
+                <Select value={inviteForm.role} onValueChange={v => setInviteForm(f => ({ ...f, role: v }))}>
+                  <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="org_admin">Org Admin</SelectItem>
+                    <SelectItem value="visitor_manager">Visitor Manager</SelectItem>
+                    <SelectItem value="receptionist">Receptionist</SelectItem>
+                    <SelectItem value="host_employee">Host Employee</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Branch</Label>
+                <Select value={inviteForm.branchId || "_all"} onValueChange={v => setInviteForm(f => ({ ...f, branchId: v === "_all" ? "" : v }))}>
+                  <SelectTrigger className="rounded-xl"><SelectValue placeholder="All branches" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_all">All branches</SelectItem>
+                    {(branches as any[]).filter((b: any) => b.isActive).map((b: any) => (
+                      <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -310,6 +439,82 @@ export default function PortalSettings() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={branchDialog} onOpenChange={setBranchDialog}>
+        <DialogContent className="rounded-2xl max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">{editingBranch ? "Edit Branch" : "Add Branch"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Branch Name *</Label>
+                <Input className="rounded-xl" placeholder="Main Office" value={branchForm.name} onChange={e => setBranchForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Arabic Name</Label>
+                <Input className="rounded-xl" dir="rtl" value={branchForm.nameAr} onChange={e => setBranchForm(f => ({ ...f, nameAr: e.target.value }))} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Branch Code *</Label>
+                <Input className="rounded-xl" placeholder="HQ-001" value={branchForm.branchCode} onChange={e => setBranchForm(f => ({ ...f, branchCode: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Entry Mode</Label>
+                <Select value={branchForm.entryMode} onValueChange={v => setBranchForm(f => ({ ...f, entryMode: v }))}>
+                  <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="staffed">Staffed</SelectItem>
+                    <SelectItem value="unmanned">Unmanned</SelectItem>
+                    <SelectItem value="hybrid">Hybrid</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Address</Label>
+              <Input className="rounded-xl" placeholder="Full address" value={branchForm.address} onChange={e => setBranchForm(f => ({ ...f, address: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>City</Label>
+                <Input className="rounded-xl" placeholder="Riyadh" value={branchForm.city} onChange={e => setBranchForm(f => ({ ...f, city: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Max Visitors</Label>
+                <Input type="number" className="rounded-xl" value={branchForm.maxConcurrentVisitors} onChange={e => setBranchForm(f => ({ ...f, maxConcurrentVisitors: parseInt(e.target.value) || 0 }))} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="rounded-xl" onClick={() => setBranchDialog(false)}>Cancel</Button>
+            <Button className="rounded-xl" onClick={handleSaveBranch}>{editingBranch ? "Save Changes" : "Create Branch"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
+        <AlertDialogContent className="rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction?.type === "deactivate" ? "Deactivate User" : "Reactivate User"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to {confirmAction?.type} <strong>{confirmAction?.userName}</strong>?
+              {confirmAction?.type === "deactivate" && " They will no longer be able to log in."}
+              {confirmAction?.type === "reactivate" && " They will be able to log in again."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
+            <AlertDialogAction className={`rounded-xl ${confirmAction?.type === "deactivate" ? "bg-red-600 hover:bg-red-700" : ""}`} onClick={handleConfirmAction}>
+              {confirmAction?.type === "deactivate" ? "Deactivate" : "Reactivate"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1,0 +1,568 @@
+# Bug Fixes, Branch Management, User Reactivation, Auto-Fill Company & Improvements
+
+## IMPORTANT CONSTRAINTS
+- Do NOT delete or recreate existing database tables.
+- Do NOT break existing login, session, auth, permission, or email flows.
+- Keep all existing functionality working.
+
+---
+
+## BUG 1 (CRITICAL): Organization edit does NOT save changes
+
+### Root Cause
+In `artifacts/api-server/src/routes/organizations.ts`, the PUT `/:orgId` handler converts camelCase field names to snake_case using:
+```typescript
+const dbField = field.replace(/([A-Z])/g, "_$1").toLowerCase();
+```
+
+This produces snake_case keys like `primary_contact_email`, `subscription_tier`, `max_users`. But Drizzle ORM's `.set()` method expects **camelCase JavaScript property names** like `primaryContactEmail`, `subscriptionTier`, `maxUsers`. So all multi-word fields silently fail to update.
+
+### Fix
+Replace the entire field-mapping loop in the PUT handler with direct camelCase mapping. Remove the `field.replace(/([A-Z])/g, "_$1").toLowerCase()` conversion. Instead, just use the field names as-is since they already match the Drizzle schema property names:
+
+```typescript
+const updates: Record<string, unknown> = { updatedAt: new Date() };
+for (const field of allowedFields) {
+  if (field in req.body) {
+    updates[field] = req.body[field];
+  }
+}
+```
+
+That's it. The field names from the frontend (`primaryContactEmail`, `subscriptionTier`, `maxUsers`, etc.) already match the Drizzle property names. The old regex conversion was breaking everything.
+
+---
+
+## BUG 2: Password visibility toggle missing on "Set Password Directly" field
+
+### Problem
+The Create Organization dialog has a password field for "Set Password Directly" mode, but it has no eye/eyeOff toggle to show the password. The super admin can't verify what they typed.
+
+### Fix
+In `artifacts/ventry/src/pages/super-admin/organizations.tsx`:
+
+1. Add state: `const [showAdminPassword, setShowAdminPassword] = useState(false);`
+2. Import `Eye, EyeOff` from lucide-react
+3. Replace the password Input in the create dialog with:
+```tsx
+{form.adminSetupMode === "direct" && (
+  <div className="space-y-1.5 mt-3">
+    <Label>Admin Password *</Label>
+    <div className="relative">
+      <Input
+        type={showAdminPassword ? "text" : "password"}
+        placeholder="Minimum 8 characters"
+        className="rounded-xl pr-12"
+        value={form.firstAdminPassword}
+        onChange={e => setForm(f => ({ ...f, firstAdminPassword: e.target.value }))}
+      />
+      <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors" onClick={() => setShowAdminPassword(!showAdminPassword)} tabIndex={-1}>
+        {showAdminPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+      </button>
+    </div>
+  </div>
+)}
+```
+
+Also apply the same password visibility toggle to ALL other password fields across the app. Check and add the eye toggle to:
+- `pages/auth/accept-invitation.tsx` — both password and confirm password fields
+- `pages/auth/reset-password.tsx` — both new password and confirm password fields
+- Any other page with a password input
+
+---
+
+## BUG 3: Users from non-active organizations can still login
+
+### Problem
+When an org status is `pending_setup`, `suspended`, or `deactivated`, the org admin and all users of that org can still log in and access the portal. Only `active` orgs should allow login (except for super_admin who has no org).
+
+### Fix
+In `artifacts/api-server/src/routes/auth.ts`, in the POST `/login` handler, after finding the user and verifying the password, add an organization status check BEFORE setting the session:
+
+```typescript
+// After the isLocked check, add:
+if (user.orgId && user.role !== "super_admin") {
+  const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
+  if (org) {
+    if (org.status === "suspended") {
+      res.status(403).json({ error: "Forbidden", message: "Your organization has been suspended. Please contact the administrator." });
+      return;
+    }
+    if (org.status === "deactivated") {
+      res.status(403).json({ error: "Forbidden", message: "Your organization has been deactivated." });
+      return;
+    }
+    if (org.status === "pending_setup") {
+      // Allow only org_admin to login for pending_setup (they need to complete the setup wizard)
+      if (user.role !== "org_admin") {
+        res.status(403).json({ error: "Forbidden", message: "Your organization is not yet active. Please wait for the admin to complete setup." });
+        return;
+      }
+    }
+  }
+}
+```
+
+This means:
+- `active` org → all users can login ✅
+- `pending_setup` org → only org_admin can login (to complete setup) ✅
+- `suspended` org → nobody can login ✅
+- `deactivated` org → nobody can login ✅
+- `super_admin` (no org) → always can login ✅
+
+---
+
+## BUG 4: "Resend Admin Invitation" fails when admin was created with direct password
+
+### Problem
+When super admin creates an org using "Set Password Directly", no invitation record is created. The resend endpoint looks for a pending invitation and finds nothing, returning "No pending admin invitation found".
+
+### Fix
+Update the resend-admin-invite endpoint in `artifacts/api-server/src/routes/organizations.ts` to handle both cases:
+
+```typescript
+router.post("/:orgId/resend-admin-invite", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const { orgId } = req.params;
+
+    // First check if there's a pending invitation to resend
+    const invitations = await db.select().from(invitationsTable)
+      .where(and(
+        eq(invitationsTable.orgId, orgId),
+        eq(invitationsTable.role, "org_admin"),
+        eq(invitationsTable.status, "pending")
+      ))
+      .limit(1);
+
+    if (invitations[0]) {
+      // Resend existing invitation
+      const inv = invitations[0];
+      const newToken = generateToken();
+      await db.update(invitationsTable).set({
+        invitationToken: newToken,
+        tokenExpiresAt: addDays(new Date(), 3),
+        resendCount: inv.resendCount + 1,
+        lastResentAt: new Date(),
+      }).where(eq(invitationsTable.id, inv.id));
+
+      const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      const baseUrl = getBaseUrl(req);
+      const invitationLink = `${baseUrl}/accept-invitation?token=${newToken}`;
+
+      await sendEmail({
+        to: inv.email,
+        subject: `Reminder: You're invited to manage ${org?.name || "an organization"} on Availo Ventry`,
+        html: buildInvitationEmail({
+          recipientName: inv.name,
+          organizationName: org?.name || "an organization",
+          role: "org_admin",
+          invitationLink,
+          expiresInDays: 3,
+        }),
+      });
+
+      res.json({ success: true, message: "Admin invitation resent", invitationLink });
+    } else {
+      // No pending invitation — check if admin already exists (was created directly)
+      const adminUsers = await db.select().from(usersTable)
+        .where(and(eq(usersTable.orgId, orgId), eq(usersTable.role, "org_admin")))
+        .limit(1);
+
+      if (adminUsers[0]) {
+        // Admin exists — send a password reset email instead
+        const admin = adminUsers[0];
+        const resetToken = generateToken(32);
+
+        await db.update(usersTable).set({
+          passwordResetToken: resetToken,
+          passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),
+        }).where(eq(usersTable.id, admin.id));
+
+        const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+        const baseUrl = getBaseUrl(req);
+        const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+
+        const { buildPasswordResetEmail } = await import("../lib/email.js");
+        await sendEmail({
+          to: admin.email,
+          subject: `Access your ${org?.name || "organization"} admin account on Availo Ventry`,
+          html: buildPasswordResetEmail({
+            recipientName: admin.name,
+            resetLink,
+            expiresInMinutes: 30,
+          }),
+        });
+
+        res.json({ success: true, message: "Password reset email sent to admin" });
+      } else {
+        res.status(404).json({ error: "No admin found or invited for this organization" });
+      }
+    }
+  } catch (err) {
+    console.error("Resend admin invite error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+```
+
+---
+
+## FEATURE 1: Branch Management UI for Org Admin
+
+### Problem
+The Settings → Branches tab shows "No branches configured" with no way to add or edit branches. The backend API for creating/editing branches already exists.
+
+### Fix
+Update `artifacts/ventry/src/pages/portal/settings.tsx`:
+
+1. Import `useCreateBranch, useUpdateBranch` from `@workspace/api-client-react` (if they exist). If not, use direct fetch calls.
+
+2. Add state for branch creation/editing:
+```typescript
+const [branchDialog, setBranchDialog] = useState(false);
+const [editingBranch, setEditingBranch] = useState<any>(null);
+const [branchForm, setBranchForm] = useState({
+  name: "", nameAr: "", address: "", city: "", branchCode: "", entryMode: "staffed", maxConcurrentVisitors: 50,
+});
+```
+
+3. Add handlers:
+```typescript
+const openBranchDialog = (branch?: any) => {
+  if (branch) {
+    setEditingBranch(branch);
+    setBranchForm({
+      name: branch.name || "", nameAr: branch.nameAr || "", address: branch.address || "",
+      city: branch.city || "", branchCode: branch.branchCode || "", entryMode: branch.entryMode || "staffed",
+      maxConcurrentVisitors: branch.maxConcurrentVisitors || 50,
+    });
+  } else {
+    setEditingBranch(null);
+    setBranchForm({ name: "", nameAr: "", address: "", city: "", branchCode: "", entryMode: "staffed", maxConcurrentVisitors: 50 });
+  }
+  setBranchDialog(true);
+};
+
+const handleSaveBranch = async () => {
+  if (!branchForm.name || !branchForm.branchCode) {
+    toast({ title: "Missing fields", description: "Branch name and code are required.", variant: "destructive" });
+    return;
+  }
+  try {
+    if (editingBranch) {
+      await fetch(`/api/organizations/${user!.orgId}/branches/${editingBranch.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify(branchForm),
+      });
+      toast({ title: "Branch Updated" });
+    } else {
+      await fetch(`/api/organizations/${user!.orgId}/branches`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify(branchForm),
+      });
+      toast({ title: "Branch Created" });
+    }
+    setBranchDialog(false);
+    queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/branches`] });
+  } catch {
+    toast({ title: "Failed", variant: "destructive" });
+  }
+};
+
+const handleToggleBranch = async (branch: any) => {
+  try {
+    await fetch(`/api/organizations/${user!.orgId}/branches/${branch.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+      body: JSON.stringify({ isActive: !branch.isActive }),
+    });
+    toast({ title: branch.isActive ? "Branch Deactivated" : "Branch Activated" });
+    queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/branches`] });
+  } catch {
+    toast({ title: "Failed", variant: "destructive" });
+  }
+};
+```
+
+4. Update the Branches tab to include an "Add Branch" button and edit/deactivate/reactivate actions on each branch card:
+
+```tsx
+{activeTab === "branches" && (
+  <div className="space-y-4">
+    <div className="flex justify-end">
+      <Button className="gap-2 rounded-xl" onClick={() => openBranchDialog()}>
+        <Plus className="w-4 h-4" /> Add Branch
+      </Button>
+    </div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {branches.map(b => (
+        <Card key={b.id} className="border-border/50 shadow-sm rounded-2xl">
+          <CardContent className="p-5">
+            {/* existing card content... */}
+            <div className="flex gap-2 mt-4 pt-3 border-t">
+              <Button variant="outline" size="sm" className="rounded-lg flex-1" onClick={() => openBranchDialog(b)}>Edit</Button>
+              <Button variant={b.isActive ? "destructive" : "default"} size="sm" className="rounded-lg flex-1" onClick={() => handleToggleBranch(b)}>
+                {b.isActive ? "Deactivate" : "Activate"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+      {branches.length === 0 && (
+        <div className="col-span-3 p-12 text-center text-muted-foreground">
+          <Building2 className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+          <p>No branches configured.</p>
+          <Button className="mt-4 rounded-xl gap-2" onClick={() => openBranchDialog()}>
+            <Plus className="w-4 h-4" /> Add Your First Branch
+          </Button>
+        </div>
+      )}
+    </div>
+  </div>
+)}
+```
+
+5. Add the branch create/edit dialog:
+
+```tsx
+<Dialog open={branchDialog} onOpenChange={setBranchDialog}>
+  <DialogContent className="rounded-2xl max-w-md">
+    <DialogHeader>
+      <DialogTitle className="font-display">{editingBranch ? "Edit Branch" : "Add Branch"}</DialogTitle>
+    </DialogHeader>
+    <div className="space-y-4 py-2">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label>Branch Name *</Label>
+          <Input className="rounded-xl" placeholder="Main Office" value={branchForm.name} onChange={e => setBranchForm(f => ({ ...f, name: e.target.value }))} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Arabic Name</Label>
+          <Input className="rounded-xl" dir="rtl" value={branchForm.nameAr} onChange={e => setBranchForm(f => ({ ...f, nameAr: e.target.value }))} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label>Branch Code *</Label>
+          <Input className="rounded-xl" placeholder="HQ-001" value={branchForm.branchCode} onChange={e => setBranchForm(f => ({ ...f, branchCode: e.target.value }))} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Entry Mode</Label>
+          <Select value={branchForm.entryMode} onValueChange={v => setBranchForm(f => ({ ...f, entryMode: v }))}>
+            <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="staffed">Staffed</SelectItem>
+              <SelectItem value="unmanned">Unmanned</SelectItem>
+              <SelectItem value="hybrid">Hybrid</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Address</Label>
+        <Input className="rounded-xl" placeholder="Full address" value={branchForm.address} onChange={e => setBranchForm(f => ({ ...f, address: e.target.value }))} />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label>City</Label>
+          <Input className="rounded-xl" placeholder="Riyadh" value={branchForm.city} onChange={e => setBranchForm(f => ({ ...f, city: e.target.value }))} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Max Visitors</Label>
+          <Input type="number" className="rounded-xl" value={branchForm.maxConcurrentVisitors} onChange={e => setBranchForm(f => ({ ...f, maxConcurrentVisitors: parseInt(e.target.value) || 0 }))} />
+        </div>
+      </div>
+    </div>
+    <DialogFooter>
+      <Button variant="outline" className="rounded-xl" onClick={() => setBranchDialog(false)}>Cancel</Button>
+      <Button className="rounded-xl" onClick={handleSaveBranch}>{editingBranch ? "Save Changes" : "Create Branch"}</Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+```
+
+---
+
+## FEATURE 2: Reactivate Deactivated Users (all roles)
+
+### Problem
+When a user is deactivated, there's no way to reactivate them. The dropdown only shows for active users and only has "Deactivate".
+
+### Fix
+In `artifacts/ventry/src/pages/portal/settings.tsx`:
+
+1. Add a reactivate handler:
+```typescript
+const handleReactivate = async (userId: string, userName: string) => {
+  try {
+    await fetch(`/api/organizations/${user!.orgId}/users/${userId}/reactivate`, {
+      method: "PATCH", credentials: "include",
+    });
+    toast({ title: "User Reactivated", description: `${userName} has been reactivated.` });
+    queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/users`] });
+  } catch {
+    toast({ title: "Action Failed", variant: "destructive" });
+  }
+};
+```
+
+2. Update the users table dropdown to show for ALL users (not just active ones) and include both options:
+
+Replace the current dropdown logic (lines 212-222) with:
+```tsx
+<td className="p-4">
+  {u.id !== user?.id && (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg"><MoreHorizontal className="w-4 h-4" /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="rounded-xl">
+        {u.isActive ? (
+          <DropdownMenuItem className="text-red-600 cursor-pointer" onClick={() => handleDeactivate(u.id, u.name)}>
+            Deactivate
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem className="text-emerald-600 cursor-pointer" onClick={() => handleReactivate(u.id, u.name)}>
+            Reactivate
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )}
+</td>
+```
+
+This makes it consistent: every user (except yourself) shows a dropdown with either "Deactivate" or "Reactivate" depending on their current status.
+
+---
+
+## FEATURE 3: Clarify Visitor Company Field Label
+
+### Problem
+When a host employee creates a visit request, the field labeled "Company / Organization" is confusing — it's unclear whether it means the visitor's own company or the company they're visiting. This field is about **where the visitor works** (the company they represent), NOT the host's organization.
+
+### Fix
+Rename the field label and placeholder to make it crystal clear across ALL forms:
+
+**In `artifacts/ventry/src/pages/host/new.tsx`:**
+
+Change the `visitorCompany` FormField (around line 133-139):
+- Change `<FormLabel>` from `Company / Organization` to `Visitor's Company`
+- Change the placeholder from `Company name` to `Where does the visitor work?`
+- Make the field optional (it already is in the schema) and add a helper text
+
+```tsx
+<FormField control={form.control} name="visitorCompany" render={({ field }) => (
+  <FormItem className="sm:col-span-2">
+    <FormLabel>Visitor's Company <span className="text-xs text-slate-400 font-normal">(optional)</span></FormLabel>
+    <FormControl><Input className="h-11 rounded-xl" placeholder="Which company does the visitor represent?" {...field} /></FormControl>
+    <FormMessage />
+  </FormItem>
+)} />
+```
+
+**In `artifacts/ventry/src/pages/public/booking.tsx`:**
+
+The label is already "Representing Company" which is better, but update it to match the same style for consistency:
+- Change `<FormLabel>` from `Representing Company` to `Your Company / Organization`
+- Change placeholder from `Company Name` to `Which company do you represent?`
+
+```tsx
+<FormField control={form.control} name="companyName" render={({ field }) => (
+  <FormItem>
+    <FormLabel className="font-semibold text-slate-700">Your Company <span className="text-xs text-slate-400 font-normal">(optional)</span></FormLabel>
+    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="Which company do you represent?" {...field} /></FormControl>
+    <FormMessage />
+  </FormItem>
+)} />
+```
+
+This makes it clear on both forms:
+- **Host employee form**: "Visitor's Company" → the company the visitor works at
+- **Public booking form**: "Your Company" → the company the visitor represents
+
+---
+
+## MY RECOMMENDATIONS (Extra Improvements)
+
+### REC 1: Show deactivated users in a different visual style
+In the users table, show deactivated users with a faded/grayed-out row style:
+```tsx
+<tr key={u.id} className={`hover:bg-slate-50/50 transition-colors ${!u.isActive ? "opacity-50" : ""}`}>
+```
+
+### REC 2: Add branch selector when inviting users
+When org admin invites a team member, add a branch dropdown so the invited user can be assigned to a specific branch. The invite form already has a `branchId` field concept but the dialog doesn't show it. Add a branch selector:
+```tsx
+<div className="space-y-1.5">
+  <Label>Branch</Label>
+  <Select value={inviteForm.branchId || ""} onValueChange={v => setInviteForm(f => ({ ...f, branchId: v }))}>
+    <SelectTrigger className="rounded-xl"><SelectValue placeholder="All branches" /></SelectTrigger>
+    <SelectContent>
+      <SelectItem value="">All branches</SelectItem>
+      {branches.filter(b => b.isActive).map(b => (
+        <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+      ))}
+    </SelectContent>
+  </Select>
+</div>
+```
+
+Add `branchId: ""` to the inviteForm state.
+
+### REC 3: Show visit count on branches
+In the branch cards, show how many visits are scheduled for today:
+Add this to the branch card:
+```tsx
+<p>Today's visitors: <span className="font-medium text-foreground">{/* fetch from stats */}</span></p>
+```
+
+### REC 4: Add confirmation dialog before deactivating users
+Currently deactivation happens on single click. Add a confirmation:
+```typescript
+const [confirmAction, setConfirmAction] = useState<{ type: "deactivate" | "reactivate"; userId: string; userName: string } | null>(null);
+```
+Show an AlertDialog asking "Are you sure you want to deactivate/reactivate {userName}?" before proceeding.
+
+### REC 5: Show last login time in users table
+The users table has `lastLoginAt` data available. Add a "Last Login" column:
+```tsx
+<th className="text-left p-4 font-semibold text-slate-600">Last Login</th>
+// and in the row:
+<td className="p-4 text-xs text-slate-500">
+  {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"}
+</td>
+```
+
+---
+
+## Summary of Files to Modify
+
+- `artifacts/api-server/src/routes/organizations.ts` — fix PUT field mapping bug, fix resend-admin-invite for direct-password orgs
+- `artifacts/api-server/src/routes/auth.ts` — block login for non-active org status
+- `artifacts/ventry/src/pages/super-admin/organizations.tsx` — add password visibility toggle on create dialog
+- `artifacts/ventry/src/pages/portal/settings.tsx` — add branch CRUD, add user reactivation, add branch selector to invite, add last login column, add confirmation dialogs, style deactivated users
+- `artifacts/ventry/src/pages/host/new.tsx` — rename company field label to "Visitor's Company"
+- `artifacts/ventry/src/pages/public/booking.tsx` — rename company field label to "Your Company"
+- `artifacts/ventry/src/pages/auth/accept-invitation.tsx` — add password visibility toggle
+- `artifacts/ventry/src/pages/auth/reset-password.tsx` — add password visibility toggle
+
+## Execution Order
+1. Fix the PUT field mapping bug in organizations.ts (BUG 1 — this is the most critical)
+2. Fix org status login check in auth.ts (BUG 3)
+3. Fix resend-admin-invite in organizations.ts (BUG 4)
+4. Add password visibility toggle to all password fields (BUG 2)
+5. Add branch management CRUD to settings page (FEATURE 1)
+6. Add user reactivation to settings page (FEATURE 2)
+7. Auto-fill company name in host/new.tsx (FEATURE 3)
+8. Apply all recommendations (REC 1-5)
+9. Test all changes:
+   - Edit an org → change email/type/tier → verify it saves and shows correctly after refresh
+   - Create org with "Set Password Directly" → verify password eye toggle works
+   - Try login with a user from a suspended org → should be blocked
+   - Try login with a user from a pending_setup org (non-admin) → should be blocked
+   - Click "Resend Admin Invitation" on an org created with direct password → should send reset email
+   - Go to Settings → Branches → Add a branch → verify it appears
+   - Edit a branch → verify changes save
+   - Deactivate a user → verify "Reactivate" option appears
+   - Reactivate the user → verify they become active again
+   - Create a visit request → verify field says "Visitor's Company" with clear placeholder

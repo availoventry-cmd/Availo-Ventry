@@ -164,6 +164,19 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 - `/reset-password?token=...` — new password with visibility toggles
 - `/accept-invitation?token=...` — invitation accept, password set, auto-login
 
+### Organization Management (Super Admin)
+- **Edit dialog**: Tabbed UI (General/Subscription/Contact), clickable org names, resend-admin-invite
+- **PUT field mapping**: All Drizzle ORM `.set()` calls use camelCase property names (not snake_case)
+- **Login blocking**: Users from suspended/deactivated orgs are blocked from login; pending_setup orgs allow only org_admin
+- **Resend admin invite**: Handles both invitation-mode (resend invite email) and direct-password-mode (send password reset email)
+
+### Portal Settings (Org Admin)
+- **Branch CRUD**: Add/edit/toggle branches in Settings → Branches tab
+- **User reactivation**: Inactive users show "Reactivate" option in dropdown with confirmation dialog
+- **Invite with branch**: Branch selector in invite dialog
+- **Last login column**: Users table shows last login date
+- **Confirmation dialogs**: AlertDialog before deactivate/reactivate actions
+
 ### API Routes (all under `/api`)
 - `/auth` — login, logout, me, accept-invitation, change-password, forgot-password, reset-password
 - `/organizations` — CRUD for super_admin

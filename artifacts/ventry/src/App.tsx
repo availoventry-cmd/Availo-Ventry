@@ -37,6 +37,7 @@ import PortalDashboard from "@/pages/portal/dashboard";
 import VisitRequests from "@/pages/portal/visit-requests";
 import ReceptionistDashboard from "@/pages/receptionist/dashboard";
 import PublicBooking from "@/pages/public/booking";
+import VisitorPass from "@/pages/public/pass";
 import TelegramSettings from "@/pages/settings/telegram";
 import PortalVisitors from "@/pages/portal/visitors";
 import PortalSettings from "@/pages/portal/settings";
@@ -138,6 +139,7 @@ function Router() {
       
       {/* Public Routes */}
       <Route path="/public/orgs/:slug" component={PublicBooking} />
+      <Route path="/public/pass/:token" component={VisitorPass} />
       
       {/* Super Admin Routes */}
       <Route path="/super-admin/dashboard">

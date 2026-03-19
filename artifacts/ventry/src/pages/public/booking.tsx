@@ -15,6 +15,7 @@ import { useState } from "react";
 
 const bookingSchema = z.object({
   visitorName: z.string().min(2, "Full name is required"),
+  email: z.string().email("Valid email is required"),
   nationalId: z.string().optional(),
   phone: z.string().min(9, "Valid phone number required"),
   companyName: z.string().optional(),
@@ -36,6 +37,7 @@ export default function PublicBooking() {
     resolver: zodResolver(bookingSchema),
     defaultValues: {
       visitorName: "",
+      email: "",
       nationalId: "",
       phone: "",
       companyName: "",
@@ -67,7 +69,7 @@ export default function PublicBooking() {
           </div>
           <h2 className="text-3xl font-display font-bold text-foreground mb-3">Request Submitted</h2>
           <p className="text-muted-foreground text-lg mb-8">
-            Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an SMS with your entry pass once approved.
+            Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an email at your provided address with your entry pass and QR code once approved.
           </p>
           <Button onClick={() => window.location.reload()} variant="outline" className="h-12 px-8 rounded-xl font-semibold hover-elevate">
             Submit Another Request
@@ -106,6 +108,16 @@ export default function PublicBooking() {
                     <FormLabel className="font-semibold text-slate-700">Phone Number</FormLabel>
                     <FormControl>
                       <Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="+966 5X XXX XXXX" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="email" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="font-semibold text-slate-700">Email Address *</FormLabel>
+                    <FormControl>
+                      <Input type="email" className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="visitor@email.com" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

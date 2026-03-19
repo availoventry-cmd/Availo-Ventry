@@ -1,0 +1,558 @@
+# Add Email Field to Visitor Booking, Create Pass Viewer Page & Fix SMS Message
+
+## IMPORTANT CONSTRAINTS
+- Do NOT break any existing forms, routes, or flows.
+- The backend already accepts `email` in POST `/api/public/orgs/:slug/book` — no backend change needed for the email field.
+- The backend already has GET `/api/public/pass/:token` that returns pass data — no backend change needed for the pass page.
+- The approval email already sends using `buildVisitApprovedEmail` — it just needs the visitor to have an email saved.
+
+---
+
+## PART 1: Add Email Field to Public Booking Form
+
+Update `artifacts/ventry/src/pages/public/booking.tsx`:
+
+### 1a. Add email to the schema
+
+Update `bookingSchema` to include email:
+
+```typescript
+const bookingSchema = z.object({
+  visitorName: z.string().min(2, "Full name is required"),
+  email: z.string().email("Valid email is required"),
+  nationalId: z.string().optional(),
+  phone: z.string().min(9, "Valid phone number required"),
+  companyName: z.string().optional(),
+  branchId: z.string().min(1, "Please select a branch"),
+  purpose: z.string().min(5, "Please state your purpose"),
+  scheduledDate: z.string().min(1, "Date is required"),
+  scheduledTimeFrom: z.string().optional(),
+});
+```
+
+Make email required since it's needed to receive the QR pass.
+
+### 1b. Add email default value
+
+In the form's `defaultValues`, add:
+```typescript
+email: "",
+```
+
+### 1c. Add email input field in the form UI
+
+Add an email field right after the phone field (inside the grid), BEFORE the National ID field:
+
+```tsx
+<FormField control={form.control} name="email" render={({ field }) => (
+  <FormItem>
+    <FormLabel className="font-semibold text-slate-700">Email Address *</FormLabel>
+    <FormControl>
+      <Input type="email" className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="visitor@email.com" {...field} />
+    </FormControl>
+    <FormMessage />
+  </FormItem>
+)} />
+```
+
+### 1d. Fix the success message
+
+On line 70, change the success message from:
+```
+Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an SMS with your entry pass once approved.
+```
+to:
+```
+Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an email at your provided address with your entry pass and QR code once approved.
+```
+
+---
+
+## PART 2: Create Visitor Pass Viewer Page
+
+Create `artifacts/ventry/src/pages/public/pass.tsx`:
+
+This is a public page (no login required) where visitors can view their entry pass and QR code after approval. The URL is `/public/pass/:token`.
+
+The page should:
+
+1. Read the `token` from the URL params using `useParams`
+2. Fetch the pass data from the API: `GET /api/public/pass/${token}`
+3. Use `fetch` directly (not auth hooks, since visitor isn't logged in)
+4. Show different states based on the pass status:
+
+**If status is "pending":**
+- Show a waiting card with a clock icon
+- "Your visit request is pending approval"
+- "You will receive an email once your visit is approved"
+- Organization name and visit date shown
+
+**If status is "approved":**
+- Show a green success card
+- Organization name, branch, date, time
+- Visitor name, host name (if any), purpose
+- **QR Code** — generate a visual QR code from the `qrCodeData` field using a simple SVG/canvas approach, OR use a QR code library
+- "Show this QR code at the reception desk for check-in"
+- A print button to print the pass
+
+**If status is "checked_in":**
+- Show a blue card: "You are currently checked in"
+- Show check-in time if available
+
+**If status is "checked_out":**
+- Show a gray card: "Visit completed"
+- "Thank you for visiting {orgName}"
+
+**If status is "rejected":**
+- Show a red card: "Visit request was declined"
+- Show rejection reason if available
+
+**If status is "expired" or "cancelled":**
+- Show appropriate message
+
+**If pass not found:**
+- Show "Invalid or expired pass link"
+
+### QR Code display
+
+For displaying the QR code, install `qrcode` package or use a CDN approach. The simplest way is to generate a data URL:
+
+```typescript
+// Use a simple approach: display the QR code text in a styled box that can be scanned
+// Or better, install qrcode library:
+// In the shell: pnpm --filter @workspace/ventry add qrcode @types/qrcode
+```
+
+If you don't want to install a library, use this approach with a free API:
+```tsx
+<img 
+  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(passData.qrCodeData)}`} 
+  alt="QR Code" 
+  className="w-48 h-48 mx-auto rounded-xl border-4 border-white shadow-lg"
+/>
+```
+
+### Full page structure
+
+```tsx
+import { useState, useEffect } from "react";
+import { useParams } from "wouter";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Building2, Clock, CheckCircle2, XCircle, LogOut, QrCode, Printer } from "lucide-react";
+
+interface PassData {
+  requestId: string;
+  visitorName: string;
+  hostName: string | null;
+  orgName: string;
+  orgLogo: string | null;
+  branchName: string;
+  scheduledDate: string;
+  scheduledTimeFrom: string | null;
+  scheduledTimeTo: string | null;
+  status: string;
+  qrCodeData: string | null;
+  purpose: string;
+}
+
+export default function VisitorPass() {
+  const { token } = useParams<{ token: string }>();
+  const [passData, setPassData] = useState<PassData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchPass() {
+      try {
+        const res = await fetch(`/api/public/pass/${token}`);
+        if (!res.ok) {
+          setError("Pass not found or link has expired.");
+          return;
+        }
+        const data = await res.json();
+        setPassData(data);
+      } catch {
+        setError("Failed to load pass. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (token) fetchPass();
+  }, [token]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (error || !passData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+        <Card className="w-full max-w-md p-8 text-center rounded-3xl shadow-xl">
+          <XCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-display font-bold mb-2">Invalid Pass</h2>
+          <p className="text-muted-foreground">{error || "This pass link is not valid."}</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const statusConfig: Record<string, { icon: any; color: string; bgColor: string; title: string; description: string }> = {
+    pending: {
+      icon: Clock, color: "text-amber-600", bgColor: "bg-amber-50",
+      title: "Pending Approval",
+      description: "Your visit request is being reviewed. You will receive an email once approved.",
+    },
+    approved: {
+      icon: CheckCircle2, color: "text-emerald-600", bgColor: "bg-emerald-50",
+      title: "Visit Approved",
+      description: "Show this QR code at the reception desk for check-in.",
+    },
+    checked_in: {
+      icon: CheckCircle2, color: "text-blue-600", bgColor: "bg-blue-50",
+      title: "Checked In",
+      description: "You are currently checked in. Enjoy your visit!",
+    },
+    checked_out: {
+      icon: LogOut, color: "text-slate-600", bgColor: "bg-slate-50",
+      title: "Visit Completed",
+      description: `Thank you for visiting ${passData.orgName}.`,
+    },
+    rejected: {
+      icon: XCircle, color: "text-red-600", bgColor: "bg-red-50",
+      title: "Request Declined",
+      description: "Unfortunately, your visit request was not approved.",
+    },
+    expired: {
+      icon: Clock, color: "text-slate-500", bgColor: "bg-slate-50",
+      title: "Request Expired",
+      description: "This visit request has expired.",
+    },
+    cancelled: {
+      icon: XCircle, color: "text-slate-500", bgColor: "bg-slate-50",
+      title: "Request Cancelled",
+      description: "This visit request was cancelled.",
+    },
+  };
+
+  const config = statusConfig[passData.status] || statusConfig.pending;
+  const StatusIcon = config.icon;
+
+  return (
+    <div className="min-h-screen bg-slate-50 py-8 px-4 flex flex-col items-center">
+      {/* Header */}
+      <div className="w-full max-w-md mb-6 text-center">
+        <div className="w-14 h-14 bg-white border border-slate-200 shadow-sm rounded-2xl flex items-center justify-center mx-auto mb-3 overflow-hidden">
+          {passData.orgLogo
+            ? <img src={passData.orgLogo} alt="Logo" className="w-full h-full object-cover" />
+            : <Building2 className="w-7 h-7 text-primary" />}
+        </div>
+        <h1 className="text-2xl font-display font-bold text-foreground">{passData.orgName}</h1>
+        <p className="text-muted-foreground text-sm mt-1">Visitor Entry Pass</p>
+      </div>
+
+      {/* Pass Card */}
+      <Card className={`w-full max-w-md rounded-3xl shadow-xl overflow-hidden ${config.bgColor}`}>
+        {/* Status Banner */}
+        <div className={`p-6 text-center border-b ${config.bgColor}`}>
+          <StatusIcon className={`w-12 h-12 mx-auto mb-3 ${config.color}`} />
+          <h2 className={`text-xl font-display font-bold ${config.color}`}>{config.title}</h2>
+          <p className="text-sm text-muted-foreground mt-1">{config.description}</p>
+        </div>
+
+        {/* QR Code (only if approved) */}
+        {passData.status === "approved" && passData.qrCodeData && (
+          <div className="p-6 bg-white text-center">
+            <div className="inline-block p-4 bg-white rounded-2xl shadow-md border border-slate-100">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(passData.qrCodeData)}`}
+                alt="Entry QR Code"
+                className="w-48 h-48 mx-auto"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground mt-3">Scan this code at the reception desk</p>
+          </div>
+        )}
+
+        {/* Visit Details */}
+        <div className="p-6 bg-white space-y-3">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-muted-foreground text-xs mb-0.5">Visitor</p>
+              <p className="font-semibold text-foreground">{passData.visitorName}</p>
+            </div>
+            {passData.hostName && (
+              <div>
+                <p className="text-muted-foreground text-xs mb-0.5">Host</p>
+                <p className="font-semibold text-foreground">{passData.hostName}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-muted-foreground text-xs mb-0.5">Branch</p>
+              <p className="font-semibold text-foreground">{passData.branchName}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs mb-0.5">Date</p>
+              <p className="font-semibold text-foreground">{passData.scheduledDate}</p>
+            </div>
+            {passData.scheduledTimeFrom && (
+              <div>
+                <p className="text-muted-foreground text-xs mb-0.5">Time</p>
+                <p className="font-semibold text-foreground">
+                  {passData.scheduledTimeFrom}{passData.scheduledTimeTo ? ` — ${passData.scheduledTimeTo}` : ""}
+                </p>
+              </div>
+            )}
+            <div className="col-span-2">
+              <p className="text-muted-foreground text-xs mb-0.5">Purpose</p>
+              <p className="font-medium text-foreground">{passData.purpose}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Print Button (only for approved) */}
+        {passData.status === "approved" && (
+          <div className="p-4 bg-slate-50 border-t text-center">
+            <Button variant="outline" className="rounded-xl gap-2" onClick={() => window.print()}>
+              <Printer className="w-4 h-4" /> Print Pass
+            </Button>
+          </div>
+        )}
+      </Card>
+
+      {/* Footer */}
+      <p className="text-xs text-muted-foreground mt-6">Powered by Availo Ventry</p>
+    </div>
+  );
+}
+```
+
+---
+
+## PART 3: Register the Pass Page Route
+
+Update `artifacts/ventry/src/App.tsx`:
+
+1. Import the new page:
+```typescript
+import VisitorPass from "@/pages/public/pass";
+```
+
+2. Add a public route right after the existing public booking route:
+```tsx
+<Route path="/public/orgs/:slug" component={PublicBooking} />
+<Route path="/public/pass/:token" component={VisitorPass} />
+```
+
+This is a public route — no ProtectedRoute wrapper needed.
+
+---
+
+## PART 4: Update Approval Email Pass Link
+
+Make sure the approval email in `artifacts/api-server/src/routes/visitRequests.ts` uses the correct frontend pass URL (not the API URL). Check the approve handler and verify the passLink is:
+
+```typescript
+const passLink = `${baseUrl}/public/pass/${enriched.trackingToken}`;
+```
+
+NOT `/api/public/pass/...` — it should point to the frontend route, not the API.
+
+---
+
+---
+
+## PART 5: Fix Truncated Purpose Text in Visit Requests Table
+
+In `artifacts/ventry/src/pages/portal/visit-requests.tsx`, line 104, the purpose text is truncated with `truncate max-w-[200px]` which cuts long text like "Business meeting re: digital trans..." making it unreadable.
+
+### Fix: Replace the truncated text with a full-text approach
+
+Replace the current Visitor cell (lines 97-106):
+
+```tsx
+<TableCell>
+  <div className="flex items-center gap-3">
+    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+      <User className="w-5 h-5" />
+    </div>
+    <div>
+      <p className="font-medium text-foreground">{req.visitor?.fullName || 'Unknown'}</p>
+      <p className="text-xs text-muted-foreground truncate max-w-[200px]">{req.purpose}</p>
+    </div>
+  </div>
+</TableCell>
+```
+
+With this (remove truncation from purpose, and add a separate Purpose column):
+
+```tsx
+<TableCell>
+  <div className="flex items-center gap-3">
+    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+      <User className="w-5 h-5" />
+    </div>
+    <div>
+      <p className="font-medium text-foreground">{req.visitor?.fullName || 'Unknown'}</p>
+      <p className="text-xs text-muted-foreground">{req.visitor?.phone || ''}</p>
+    </div>
+  </div>
+</TableCell>
+```
+
+Then add a new **Purpose** column to the table:
+
+In `<TableHeader>`, add after the "Visitor" head:
+```tsx
+<TableHead className="font-semibold">Purpose</TableHead>
+```
+
+In `<TableBody>` rows, add after the Visitor cell:
+```tsx
+<TableCell>
+  <p className="text-sm text-foreground max-w-[300px]">{req.purpose}</p>
+</TableCell>
+```
+
+Update the `colSpan` in the loading and empty rows from `6` to `7` since we added a column.
+
+Also add a **detail view** — when clicking on a visit request row, show a dialog/sheet with ALL details:
+
+### Add a Detail Dialog
+
+Import `Dialog, DialogContent, DialogHeader, DialogTitle` (already in the project).
+
+Add state:
+```typescript
+const [selectedRequest, setSelectedRequest] = useState<any>(null);
+```
+
+Make each row clickable:
+```tsx
+<TableRow key={req.id} className="group hover:bg-slate-50/50 cursor-pointer" onClick={() => setSelectedRequest(req)}>
+```
+
+Add a detail dialog at the bottom of the component:
+
+```tsx
+{/* Request Detail Dialog */}
+<Dialog open={!!selectedRequest} onOpenChange={() => setSelectedRequest(null)}>
+  <DialogContent className="rounded-2xl max-w-lg">
+    <DialogHeader>
+      <DialogTitle className="font-display text-xl">Visit Request Details</DialogTitle>
+    </DialogHeader>
+    {selectedRequest && (
+      <div className="space-y-4 py-2">
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Visitor Name</p>
+            <p className="font-semibold">{selectedRequest.visitor?.fullName || 'Unknown'}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Phone</p>
+            <p className="font-semibold">{selectedRequest.visitor?.phone || '—'}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Email</p>
+            <p className="font-semibold">{selectedRequest.visitor?.email || '—'}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Company</p>
+            <p className="font-semibold">{selectedRequest.visitor?.companyName || '—'}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">National ID</p>
+            <p className="font-semibold">{selectedRequest.visitor?.nationalIdNumber || '—'}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Type</p>
+            <p className="font-semibold capitalize">{selectedRequest.type.replace('_', ' ')}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Branch</p>
+            <p className="font-semibold">{selectedRequest.branch?.name || '—'}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Status</p>
+            {getStatusBadge(selectedRequest.status)}
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Scheduled Date</p>
+            <p className="font-semibold">{format(new Date(selectedRequest.scheduledDate), "MMMM d, yyyy")}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Time</p>
+            <p className="font-semibold">
+              {selectedRequest.scheduledTimeFrom || '—'}
+              {selectedRequest.scheduledTimeTo ? ` — ${selectedRequest.scheduledTimeTo}` : ''}
+            </p>
+          </div>
+          {selectedRequest.hostUser && (
+            <div>
+              <p className="text-muted-foreground text-xs mb-1">Host</p>
+              <p className="font-semibold">{selectedRequest.hostUser.name}</p>
+            </div>
+          )}
+        </div>
+        <div>
+          <p className="text-muted-foreground text-xs mb-1">Purpose of Visit</p>
+          <p className="text-sm font-medium bg-slate-50 p-3 rounded-xl">{selectedRequest.purpose}</p>
+        </div>
+        {selectedRequest.notes && (
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Notes</p>
+            <p className="text-sm bg-slate-50 p-3 rounded-xl">{selectedRequest.notes}</p>
+          </div>
+        )}
+        {selectedRequest.rejectionReason && (
+          <div>
+            <p className="text-muted-foreground text-xs mb-1">Rejection Reason</p>
+            <p className="text-sm text-red-600 bg-red-50 p-3 rounded-xl">{selectedRequest.rejectionReason}</p>
+          </div>
+        )}
+        {selectedRequest.status === 'pending' && (
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" className="flex-1 rounded-xl text-red-600 border-red-200 hover:bg-red-50"
+              onClick={() => { handleReject(selectedRequest.id); setSelectedRequest(null); }}>
+              <X className="w-4 h-4 mr-2" /> Reject
+            </Button>
+            <Button className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => { handleApprove(selectedRequest.id); setSelectedRequest(null); }}>
+              <Check className="w-4 h-4 mr-2" /> Approve
+            </Button>
+          </div>
+        )}
+      </div>
+    )}
+  </DialogContent>
+</Dialog>
+```
+
+Import `Dialog, DialogContent, DialogHeader, DialogTitle` at the top of the file.
+
+---
+
+## Summary of Files
+
+**Create:**
+- `artifacts/ventry/src/pages/public/pass.tsx` — Visitor pass viewer page
+
+**Modify:**
+- `artifacts/ventry/src/pages/public/booking.tsx` — Add email field + fix SMS message
+- `artifacts/ventry/src/App.tsx` — Register `/public/pass/:token` route
+- `artifacts/api-server/src/routes/visitRequests.ts` — Verify passLink points to frontend URL
+- `artifacts/ventry/src/pages/portal/visit-requests.tsx` — Add Purpose column, remove truncation, add detail dialog
+
+## Test Steps
+1. Open `/public/orgs/ministry-of-interior` → verify email field appears in the form
+2. Fill the form with a real email → submit → verify success message says "email" not "SMS"
+3. Login as visitor manager → approve the request → check if visitor receives approval email
+4. Click "View Entry Pass & QR Code" in the email → verify it opens the pass page with QR code
+5. Open `/public/pass/INVALID_TOKEN` → verify it shows "Invalid Pass" error
+6. Go to Visit Requests page → verify purpose text is fully visible, not truncated
+7. Click on a visit request row → verify detail dialog opens with all visitor info, full purpose text, notes, and approve/reject buttons

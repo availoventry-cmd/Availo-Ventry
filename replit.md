@@ -98,7 +98,7 @@ React + Vite frontend for Availo Ventry. Served at previewPath `/`.
 - Built with React, TailwindCSS (v4 via @tailwindcss/vite), shadcn/ui components, wouter router, React Query
 - Uses `@workspace/api-client-react` generated hooks to call the API server
 - Auth: session cookie via `useAuth()` hook in `src/hooks/use-auth.tsx`
-- Pages: Login, Super Admin Dashboard, Portal Dashboard (org admin/vm), Visit Requests, Receptionist Console, Public Booking
+- Pages: Login, Super Admin Dashboard, Portal Dashboard (org admin/vm), Visit Requests (with detail dialog), Receptionist Console, Public Booking, Visitor Pass Viewer
 - Layout: `AppLayout` with role-aware sidebar navigation
 - Entry at `src/main.tsx`, app routing in `src/App.tsx`
 - All API calls go to relative `/api/...` paths — platform routes these to port 8080

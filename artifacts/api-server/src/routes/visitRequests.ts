@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, visitRequestsTable, visitorsTable, usersTable, branchesTable, organizationsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId, generateQrCode, generateToken } from "../lib/id.js";
 import { addHours } from "../lib/dateUtils.js";
@@ -36,36 +36,49 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 
     let requests = await db.select().from(visitRequestsTable)
       .where(eq(visitRequestsTable.orgId, orgId))
-      .orderBy(visitRequestsTable.createdAt);
+      .orderBy(sql`${visitRequestsTable.createdAt} DESC`);
 
-    // Host employees only see their own
     if (user.role === "host_employee") {
       requests = requests.filter(r => r.hostUserId === user.id);
     }
-    // Receptionists see only today's in their branch
     if (user.role === "receptionist") {
       const today = new Date().toISOString().split("T")[0];
       requests = requests.filter(r => r.scheduledDate === today && (user.branchId ? r.branchId === user.branchId : true));
     }
-    // Visitor managers see their branch
     if (user.role === "visitor_manager" && user.branchId) {
       requests = requests.filter(r => r.branchId === user.branchId);
     }
 
     if (status) requests = requests.filter(r => r.status === status);
     if (type) requests = requests.filter(r => r.type === type);
-    if (branchId) requests = requests.filter(r => r.branchId === branchId);
-    if (dateFrom) requests = requests.filter(r => r.scheduledDate >= dateFrom);
-    if (dateTo) requests = requests.filter(r => r.scheduledDate <= dateTo);
+    if (branchId) requests = requests.filter(r => r.branchId === (branchId as string));
+    if (dateFrom) requests = requests.filter(r => r.scheduledDate >= (dateFrom as string));
+    if (dateTo) requests = requests.filter(r => r.scheduledDate <= (dateTo as string));
 
     const p = parseInt(page as string);
     const l = parseInt(limit as string);
+
+    if (search && (search as string).trim()) {
+      const s = (search as string).toLowerCase().trim();
+      const allEnriched = await Promise.all(requests.map(enrichRequest));
+      const matched = allEnriched.filter(r =>
+        r.visitor?.fullName?.toLowerCase().includes(s) ||
+        r.visitor?.phone?.includes(s) ||
+        r.visitor?.email?.toLowerCase().includes(s) ||
+        r.purpose?.toLowerCase().includes(s)
+      );
+      const total = matched.length;
+      const paginated = matched.slice((p - 1) * l, p * l);
+      res.json({ data: paginated, meta: { total, page: p, limit: l, totalPages: Math.ceil(total / l) } });
+      return;
+    }
+
     const total = requests.length;
     const paginated = requests.slice((p - 1) * l, p * l);
-
     const enriched = await Promise.all(paginated.map(enrichRequest));
     res.json({ data: enriched, meta: { total, page: p, limit: l, totalPages: Math.ceil(total / l) } });
   } catch (err) {
+    console.error("List visit requests error:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -166,12 +179,28 @@ router.get("/:requestId", requireAuth, requireOrgAccess, async (req, res) => {
 router.patch("/:requestId/approve", requireAuth, requireOrgAccess, requirePermission("visit_requests.approve"), async (req, res) => {
   try {
     const { orgId, requestId } = req.params;
+
+    const currentReq = await db.select().from(visitRequestsTable)
+      .where(and(eq(visitRequestsTable.id, requestId), eq(visitRequestsTable.orgId, orgId)))
+      .limit(1);
+
+    if (!currentReq[0]) {
+      res.status(404).json({ error: "Visit request not found" });
+      return;
+    }
+
+    const qrCode = currentReq[0].qrCode || generateQrCode();
+    const trackingToken = currentReq[0].trackingToken || generateToken(16);
+
     await db.update(visitRequestsTable).set({
       status: "approved",
       approvedById: req.user!.id,
       approvedAt: new Date(),
       approvalMethod: "web",
-      notes: req.body.notes || null,
+      notes: req.body.notes || currentReq[0].notes || null,
+      qrCode,
+      qrExpiresAt: addHours(new Date(), 24),
+      trackingToken,
     }).where(and(eq(visitRequestsTable.id, requestId), eq(visitRequestsTable.orgId, orgId)));
     const updated = await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1);
     const enriched = await enrichRequest(updated[0]);

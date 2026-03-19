@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { format } from "date-fns";
@@ -15,12 +16,16 @@ import { useQueryClient } from "@tanstack/react-query";
 export default function VisitRequests() {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
+  const [rejectDialog, setRejectDialog] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   const { data, isLoading } = useListVisitRequests(user?.orgId || "", {
-    search,
+    ...(search.trim() ? { search: search.trim() } : {}),
+    ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     limit: 50
   }, { query: { enabled: !!user?.orgId } });
 
@@ -37,9 +42,9 @@ export default function VisitRequests() {
     }
   };
 
-  const handleReject = async (id: string) => {
+  const handleReject = async (id: string, reason: string) => {
     try {
-      await rejectMutation.mutateAsync({ orgId: user!.orgId!, requestId: id, data: { rejectionReason: "Rejected by admin" } });
+      await rejectMutation.mutateAsync({ orgId: user!.orgId!, requestId: id, data: { rejectionReason: reason || "No reason provided" } });
       toast({ title: "Request Rejected" });
       queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/visit-requests`] });
     } catch (e) {
@@ -73,6 +78,25 @@ export default function VisitRequests() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+      </div>
+
+      <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit flex-wrap">
+        {[
+          { id: "all", label: "All" },
+          { id: "pending", label: "Pending" },
+          { id: "approved", label: "Approved" },
+          { id: "checked_in", label: "Checked In" },
+          { id: "checked_out", label: "Checked Out" },
+          { id: "rejected", label: "Rejected" },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setStatusFilter(tab.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${statusFilter === tab.id ? "bg-white text-foreground shadow-sm" : "text-slate-600 hover:text-foreground"}`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <Card className="border-border/50 shadow-sm rounded-2xl overflow-hidden">
@@ -128,7 +152,7 @@ export default function VisitRequests() {
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       {req.status === 'pending' ? (
                         <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 hover-elevate" onClick={() => handleReject(req.id)}>
+                          <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 hover-elevate" onClick={() => setRejectDialog(req.id)}>
                             <X className="w-4 h-4" />
                           </Button>
                           <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-md hover-elevate" onClick={() => handleApprove(req.id)}>
@@ -226,7 +250,7 @@ export default function VisitRequests() {
               {selectedRequest.status === 'pending' && (
                 <div className="flex gap-3 pt-2">
                   <Button variant="outline" className="flex-1 rounded-xl text-red-600 border-red-200 hover:bg-red-50"
-                    onClick={() => { handleReject(selectedRequest.id); setSelectedRequest(null); }}>
+                    onClick={() => { setRejectDialog(selectedRequest.id); setSelectedRequest(null); }}>
                     <X className="w-4 h-4 mr-2" /> Reject
                   </Button>
                   <Button className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-700"
@@ -237,6 +261,36 @@ export default function VisitRequests() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!rejectDialog} onOpenChange={() => { setRejectDialog(null); setRejectReason(""); }}>
+        <DialogContent className="rounded-2xl max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">Reject Visit Request</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">Please provide a reason for rejecting this visit request. This will be shared with the visitor.</p>
+            <Textarea
+              placeholder="Enter rejection reason..."
+              className="rounded-xl resize-none"
+              rows={3}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-3 justify-end">
+            <Button variant="outline" className="rounded-xl" onClick={() => { setRejectDialog(null); setRejectReason(""); }}>Cancel</Button>
+            <Button className="rounded-xl bg-red-600 hover:bg-red-700 text-white" onClick={() => {
+              if (rejectDialog) {
+                handleReject(rejectDialog, rejectReason);
+                setRejectDialog(null);
+                setRejectReason("");
+              }
+            }}>
+              Reject Request
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

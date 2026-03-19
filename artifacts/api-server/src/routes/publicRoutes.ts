@@ -77,6 +77,17 @@ router.post("/orgs/:slug/book", async (req, res) => {
       });
       const newVisitors = await db.select().from(visitorsTable).where(eq(visitorsTable.id, visitorId)).limit(1);
       visitor = newVisitors[0];
+    } else {
+      const visitorUpdates: Record<string, unknown> = { updatedAt: new Date() };
+      if (visitorName && visitorName !== visitor.fullName) visitorUpdates.fullName = visitorName;
+      if (email && !visitor.email) visitorUpdates.email = email;
+      if (nationalId && !visitor.nationalIdNumber) visitorUpdates.nationalIdNumber = nationalId;
+      if (companyName && !visitor.companyName) visitorUpdates.companyName = companyName;
+
+      if (Object.keys(visitorUpdates).length > 1) {
+        await db.update(visitorsTable).set(visitorUpdates as Partial<typeof visitorsTable.$inferInsert>)
+          .where(eq(visitorsTable.id, visitor.id));
+      }
     }
 
     const requestId = generateId();

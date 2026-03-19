@@ -1,0 +1,342 @@
+# Fix Visit Requests Not Showing + Full Code Review Fixes
+
+## IMPORTANT CONSTRAINTS
+- Do NOT break existing flows.
+- Import `sql` from drizzle-orm where needed.
+- Keep all existing functionality working.
+
+---
+
+## BUG 1 (CRITICAL): Visit requests sorted wrong — newest at bottom, so new requests are invisible
+
+In `artifacts/api-server/src/routes/visitRequests.ts` line 39, the query uses `.orderBy(visitRequestsTable.createdAt)` which defaults to ASC (oldest first). New visit requests go to the bottom and may not appear in the first page of results.
+
+### Fix
+Change line 39 from:
+```typescript
+.orderBy(visitRequestsTable.createdAt);
+```
+to:
+```typescript
+.orderBy(sql`${visitRequestsTable.createdAt} DESC`);
+```
+
+Add `sql` to the drizzle-orm import at the top of the file:
+```typescript
+import { eq, and, sql } from "drizzle-orm";
+```
+
+---
+
+## BUG 2: Search box on Visit Requests page does nothing
+
+The backend GET handler destructures `search` from query params (line 34) but never uses it for filtering. The frontend sends `search` but nothing gets filtered.
+
+### Fix
+Replace the entire GET `/` handler in `artifacts/api-server/src/routes/visitRequests.ts` with:
+
+```typescript
+// GET /api/organizations/:orgId/visit-requests
+router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const { status, type, branchId, dateFrom, dateTo, search, page = "1", limit = "20" } = req.query;
+    const user = req.user!;
+
+    let requests = await db.select().from(visitRequestsTable)
+      .where(eq(visitRequestsTable.orgId, orgId))
+      .orderBy(sql`${visitRequestsTable.createdAt} DESC`);
+
+    // Role-based filtering
+    if (user.role === "host_employee") {
+      requests = requests.filter(r => r.hostUserId === user.id);
+    }
+    if (user.role === "receptionist") {
+      const today = new Date().toISOString().split("T")[0];
+      requests = requests.filter(r => r.scheduledDate === today && (user.branchId ? r.branchId === user.branchId : true));
+    }
+    if (user.role === "visitor_manager" && user.branchId) {
+      requests = requests.filter(r => r.branchId === user.branchId);
+    }
+
+    if (status) requests = requests.filter(r => r.status === status);
+    if (type) requests = requests.filter(r => r.type === type);
+    if (branchId) requests = requests.filter(r => r.branchId === (branchId as string));
+    if (dateFrom) requests = requests.filter(r => r.scheduledDate >= (dateFrom as string));
+    if (dateTo) requests = requests.filter(r => r.scheduledDate <= (dateTo as string));
+
+    const p = parseInt(page as string);
+    const l = parseInt(limit as string);
+
+    // If search is provided, enrich ALL results first then filter by visitor name/phone/email/purpose
+    if (search && (search as string).trim()) {
+      const s = (search as string).toLowerCase().trim();
+      const allEnriched = await Promise.all(requests.map(enrichRequest));
+      const matched = allEnriched.filter(r =>
+        r.visitor?.fullName?.toLowerCase().includes(s) ||
+        r.visitor?.phone?.includes(s) ||
+        r.visitor?.email?.toLowerCase().includes(s) ||
+        r.purpose?.toLowerCase().includes(s)
+      );
+      const total = matched.length;
+      const paginated = matched.slice((p - 1) * l, p * l);
+      res.json({ data: paginated, meta: { total, page: p, limit: l, totalPages: Math.ceil(total / l) } });
+      return;
+    }
+
+    const total = requests.length;
+    const paginated = requests.slice((p - 1) * l, p * l);
+    const enriched = await Promise.all(paginated.map(enrichRequest));
+    res.json({ data: enriched, meta: { total, page: p, limit: l, totalPages: Math.ceil(total / l) } });
+  } catch (err) {
+    console.error("List visit requests error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+```
+
+Make sure `sql` is imported from `drizzle-orm` at the top of the file.
+
+---
+
+## BUG 3: Frontend sends empty search string as query param
+
+In `artifacts/ventry/src/pages/portal/visit-requests.tsx`, the `useListVisitRequests` call always sends `search` even when empty. This creates unnecessary API calls.
+
+### Fix
+Change line 22-25 from:
+```typescript
+const { data, isLoading } = useListVisitRequests(user?.orgId || "", {
+    search,
+    limit: 50
+  }, { query: { enabled: !!user?.orgId } });
+```
+to:
+```typescript
+const { data, isLoading } = useListVisitRequests(user?.orgId || "", {
+    ...(search.trim() ? { search: search.trim() } : {}),
+    limit: 50
+  }, { query: { enabled: !!user?.orgId } });
+```
+
+---
+
+## BUG 4: Reject uses hardcoded reason "Rejected by admin"
+
+In `artifacts/ventry/src/pages/portal/visit-requests.tsx` line 42, when rejecting a request, it always sends `rejectionReason: "Rejected by admin"` without asking the user for a real reason.
+
+### Fix
+Add a rejection reason dialog. Update the file:
+
+1. Add state:
+```typescript
+const [rejectDialog, setRejectDialog] = useState<string | null>(null);
+const [rejectReason, setRejectReason] = useState("");
+```
+
+2. Replace the `handleReject` function:
+```typescript
+const handleReject = async (id: string, reason: string) => {
+  try {
+    await rejectMutation.mutateAsync({ orgId: user!.orgId!, requestId: id, data: { rejectionReason: reason || "No reason provided" } });
+    toast({ title: "Request Rejected" });
+    queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/visit-requests`] });
+  } catch (e) {
+    toast({ title: "Error", variant: "destructive" });
+  }
+};
+```
+
+3. In the table row, change the reject button `onClick` from `handleReject(req.id)` to:
+```typescript
+onClick={() => setRejectDialog(req.id)}
+```
+
+4. In the detail dialog reject button, change from `handleReject(selectedRequest.id)` to:
+```typescript
+onClick={() => { setRejectDialog(selectedRequest.id); setSelectedRequest(null); }}
+```
+
+5. Add a rejection dialog. Import `Textarea` from the UI components. Add this dialog after the existing detail dialog:
+
+```tsx
+{/* Reject Reason Dialog */}
+<Dialog open={!!rejectDialog} onOpenChange={() => { setRejectDialog(null); setRejectReason(""); }}>
+  <DialogContent className="rounded-2xl max-w-md">
+    <DialogHeader>
+      <DialogTitle className="font-display">Reject Visit Request</DialogTitle>
+    </DialogHeader>
+    <div className="space-y-4 py-2">
+      <p className="text-sm text-muted-foreground">Please provide a reason for rejecting this visit request. This will be shared with the visitor.</p>
+      <Textarea
+        placeholder="Enter rejection reason..."
+        className="rounded-xl resize-none"
+        rows={3}
+        value={rejectReason}
+        onChange={(e) => setRejectReason(e.target.value)}
+      />
+    </div>
+    <div className="flex gap-3 justify-end">
+      <Button variant="outline" className="rounded-xl" onClick={() => { setRejectDialog(null); setRejectReason(""); }}>Cancel</Button>
+      <Button className="rounded-xl bg-red-600 hover:bg-red-700 text-white" onClick={() => {
+        if (rejectDialog) {
+          handleReject(rejectDialog, rejectReason);
+          setRejectDialog(null);
+          setRejectReason("");
+        }
+      }}>
+        Reject Request
+      </Button>
+    </div>
+  </DialogContent>
+</Dialog>
+```
+
+Import `Textarea` at the top:
+```typescript
+import { Textarea } from "@/components/ui/textarea";
+```
+
+---
+
+## BUG 5: Visit Requests page has no status filter
+
+Users have no way to filter by status (pending, approved, rejected, etc). They have to scroll through all requests to find pending ones.
+
+### Fix
+Add status filter tabs at the top of the Visit Requests page.
+
+In `artifacts/ventry/src/pages/portal/visit-requests.tsx`:
+
+1. Add state:
+```typescript
+const [statusFilter, setStatusFilter] = useState<string>("all");
+```
+
+2. Update the `useListVisitRequests` call to include the status filter:
+```typescript
+const { data, isLoading } = useListVisitRequests(user?.orgId || "", {
+    ...(search.trim() ? { search: search.trim() } : {}),
+    ...(statusFilter !== "all" ? { status: statusFilter } : {}),
+    limit: 50
+  }, { query: { enabled: !!user?.orgId } });
+```
+
+3. Add filter tabs in the UI, between the header and the table card:
+```tsx
+{/* Status Filter Tabs */}
+<div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit flex-wrap">
+  {[
+    { id: "all", label: "All" },
+    { id: "pending", label: "Pending" },
+    { id: "approved", label: "Approved" },
+    { id: "checked_in", label: "Checked In" },
+    { id: "checked_out", label: "Checked Out" },
+    { id: "rejected", label: "Rejected" },
+  ].map(tab => (
+    <button
+      key={tab.id}
+      onClick={() => setStatusFilter(tab.id)}
+      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${statusFilter === tab.id ? "bg-white text-foreground shadow-sm" : "text-slate-600 hover:text-foreground"}`}
+    >
+      {tab.label}
+    </button>
+  ))}
+</div>
+```
+
+---
+
+## BUG 6: Org admin role-based filtering may hide walk-in requests
+
+In the visit requests GET handler, org_admin is NOT filtered — they see ALL org requests. But visitor_manager is filtered by `user.branchId`. If a visitor_manager has no branchId assigned, they see all requests (which is correct). However, if they DO have a branchId, walk-in requests submitted via the public booking page to a different branch won't show. This is working as intended, but document this behavior.
+
+No code change needed — just be aware that org_admin sees everything, but branch-assigned roles only see their branch.
+
+---
+
+## BUG 7: Visit request created via public booking may not have a QR code initially
+
+In `publicRoutes.ts` line 89, the QR code is only generated if `autoApprove` is true. For normal pending requests, `qrCode` is null. When the request is later approved via the approval endpoint in `visitRequests.ts`, the approval handler does NOT generate a QR code — it just changes status to "approved". So the visitor pass page shows no QR code even after approval.
+
+### Fix
+In `artifacts/api-server/src/routes/visitRequests.ts`, in the PATCH `/:requestId/approve` handler, BEFORE updating the status, check if the request already has a QR code. If not, generate one:
+
+Change the approve handler's update logic. Find the `.set({...})` call and update it to:
+
+```typescript
+// First get the current request to check if QR exists
+const currentReq = await db.select().from(visitRequestsTable)
+  .where(and(eq(visitRequestsTable.id, requestId), eq(visitRequestsTable.orgId, orgId)))
+  .limit(1);
+
+if (!currentReq[0]) {
+  res.status(404).json({ error: "Visit request not found" });
+  return;
+}
+
+const qrCode = currentReq[0].qrCode || generateQrCode();
+const trackingToken = currentReq[0].trackingToken || generateToken(16);
+
+await db.update(visitRequestsTable).set({
+  status: "approved",
+  approvedById: req.user!.id,
+  approvedAt: new Date(),
+  approvalMethod: "web",
+  notes: req.body.notes || currentReq[0].notes || null,
+  qrCode,
+  qrExpiresAt: addHours(new Date(), 24),
+  trackingToken,
+}).where(and(eq(visitRequestsTable.id, requestId), eq(visitRequestsTable.orgId, orgId)));
+```
+
+This ensures every approved request gets a QR code and tracking token, even if it was originally submitted as a walk-in without one.
+
+---
+
+## BUG 8: Visitor data not updated on repeat visits
+
+In `publicRoutes.ts` lines 61-80, when a visitor with the same phone already exists, the code reuses the existing visitor record but does NOT update their name, email, or company. So if a visitor registers again with an email (which they didn't provide the first time), the email is lost.
+
+### Fix
+After finding an existing visitor (line 62), update their info if new data is provided:
+
+```typescript
+if (!visitor) {
+  // Create new visitor (existing code)
+  ...
+} else {
+  // Update visitor with any new info provided
+  const visitorUpdates: Record<string, unknown> = { updatedAt: new Date() };
+  if (visitorName && visitorName !== visitor.fullName) visitorUpdates.fullName = visitorName;
+  if (email && !visitor.email) visitorUpdates.email = email;
+  if (nationalId && !visitor.nationalIdNumber) visitorUpdates.nationalIdNumber = nationalId;
+  if (companyName && !visitor.companyName) visitorUpdates.companyName = companyName;
+  
+  if (Object.keys(visitorUpdates).length > 1) {
+    await db.update(visitorsTable).set(visitorUpdates as Partial<typeof visitorsTable.$inferInsert>)
+      .where(eq(visitorsTable.id, visitor.id));
+  }
+}
+```
+
+---
+
+## Summary of Files to Modify
+
+- `artifacts/api-server/src/routes/visitRequests.ts` — Fix sort order (DESC), implement search, generate QR on approve
+- `artifacts/api-server/src/routes/publicRoutes.ts` — Update existing visitor data on repeat booking
+- `artifacts/ventry/src/pages/portal/visit-requests.tsx` — Fix empty search, add reject reason dialog, add status filter tabs
+
+## Execution Order
+1. Fix visitRequests.ts backend: sort DESC, search implementation, QR code on approve
+2. Fix publicRoutes.ts: update visitor data on repeat visits
+3. Fix visit-requests.tsx frontend: clean search param, reject dialog, status filters
+4. Test:
+   - Submit a visit via public booking → login as org admin → should show at TOP of Visit Requests list
+   - Search by visitor name → should filter correctly
+   - Search by purpose → should filter correctly
+   - Click "Pending" tab → shows only pending requests
+   - Reject a request → should ask for reason, not use hardcoded text
+   - Approve a walk-in request → visitor pass page should show QR code
+   - Same visitor books again with email → email should be saved on their record

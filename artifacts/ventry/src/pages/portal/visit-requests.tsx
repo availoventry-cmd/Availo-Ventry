@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { format } from "date-fns";
-import { Check, X, Search, MoreHorizontal, User, Clock } from "lucide-react";
+import { Check, X, Search, MoreHorizontal, User, Clock, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -27,7 +27,7 @@ export default function VisitRequests() {
     ...(search.trim() ? { search: search.trim() } : {}),
     ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     limit: 50
-  }, { query: { enabled: !!user?.orgId } });
+  }, { query: { enabled: !!user?.orgId, refetchInterval: 10000 } });
 
   const approveMutation = useApproveVisitRequest();
   const rejectMutation = useRejectVisitRequest();
@@ -69,14 +69,19 @@ export default function VisitRequests() {
           <h1 className="text-3xl font-display font-bold text-foreground">Visit Requests</h1>
           <p className="text-muted-foreground mt-1">Manage and approve upcoming visitors.</p>
         </div>
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input 
-            placeholder="Search visitor name..." 
-            className="pl-9 h-11 rounded-xl bg-white border-slate-200"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+        <div className="flex gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:w-72">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input 
+              placeholder="Search visitor name..." 
+              className="pl-9 h-11 rounded-xl bg-white border-slate-200"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <Button variant="outline" size="icon" className="h-11 w-11 rounded-xl" onClick={() => queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/visit-requests`] })}>
+            <RefreshCw className="w-4 h-4" />
+          </Button>
         </div>
       </div>
 

@@ -99,14 +99,15 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
       return;
     }
 
-    // Create or find visitor
-    let visitor = visitorPhone || visitorNationalId
-      ? (await db.select().from(visitorsTable)
-          .where(visitorPhone
-            ? eq(visitorsTable.phone, visitorPhone)
-            : eq(visitorsTable.nationalIdNumber, visitorNationalId!))
-          .limit(1))[0]
-      : null;
+    // Create or find visitor (only match if same name to avoid merging different people)
+    let visitor: typeof visitorsTable.$inferSelect | null = null;
+    if (visitorPhone || visitorNationalId) {
+      const candidates = await db.select().from(visitorsTable)
+        .where(visitorPhone
+          ? eq(visitorsTable.phone, visitorPhone)
+          : eq(visitorsTable.nationalIdNumber, visitorNationalId!));
+      visitor = candidates.find(v => v.fullName.toLowerCase().trim() === visitorName.toLowerCase().trim()) || null;
+    }
 
     if (!visitor) {
       const visitorId = generateId();
@@ -123,6 +124,17 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
       });
       const newVisitors = await db.select().from(visitorsTable).where(eq(visitorsTable.id, visitorId)).limit(1);
       visitor = newVisitors[0];
+    } else {
+      const visitorUpdates: Record<string, unknown> = { updatedAt: new Date() };
+      if (visitorEmail && !visitor.email) visitorUpdates.email = visitorEmail;
+      if (visitorPhone && !visitor.phone) visitorUpdates.phone = visitorPhone;
+      if (visitorNationalId && !visitor.nationalIdNumber) visitorUpdates.nationalIdNumber = visitorNationalId;
+      if (visitorCompany && !visitor.companyName) visitorUpdates.companyName = visitorCompany;
+
+      if (Object.keys(visitorUpdates).length > 1) {
+        await db.update(visitorsTable).set(visitorUpdates as any)
+          .where(eq(visitorsTable.id, visitor.id));
+      }
     }
 
     const requestId = generateId();

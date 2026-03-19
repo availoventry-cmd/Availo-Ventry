@@ -99,8 +99,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <Sidebar className="border-r border-border/50 bg-card">
           <SidebarHeader className="p-4 flex items-center justify-center border-b border-border/50">
             <div className="flex items-center gap-2">
-              <img src={`${import.meta.env.BASE_URL}images/logo-mark.png`} alt="Ventry Logo" className="w-8 h-8 object-contain" />
-              <span className="font-display font-bold text-xl tracking-tight text-primary">Ventry</span>
+              <img src={`${import.meta.env.BASE_URL}images/logo-horizontal.png`} alt="Availo Ventry" className="h-9 object-contain" />
             </div>
           </SidebarHeader>
           <SidebarContent className="p-2 pt-4">

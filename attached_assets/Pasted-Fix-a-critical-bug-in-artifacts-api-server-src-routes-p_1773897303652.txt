@@ -1,0 +1,46 @@
+Fix a critical bug in artifacts/api-server/src/routes/publicRoutes.ts in the "Find or create visitor" section (around line 60-91).
+
+PROBLEM: When a second person submits a visit request with the same phone number but a different name, the system reuses the existing visitor record and OVERWRITES their name. Same issue happens with matching email. Different people can share a phone or email.
+
+FIX: Only reuse an existing visitor if the name matches (case-insensitive). If the name is different, ALWAYS create a new visitor — they are a different person.
+
+Replace the "Find or create visitor" section with:
+
+let visitor = null;
+if (phone || email) {
+  const candidates = phone
+    ? await db.select().from(visitorsTable).where(eq(visitorsTable.phone, phone))
+    : await db.select().from(visitorsTable).where(eq(visitorsTable.email, email));
+  // Only match if name is the same person
+  visitor = candidates.find(v => v.fullName.toLowerCase().trim() === visitorName.toLowerCase().trim()) || null;
+}
+
+if (!visitor) {
+  const visitorId = generateId();
+  await db.insert(visitorsTable).values({
+    id: visitorId,
+    fullName: visitorName,
+    fullNameAr: visitorNameAr,
+    nationalIdNumber: nationalId,
+    phone,
+    email,
+    companyName,
+    isBlacklisted: false,
+    verificationStatus: "pending",
+  });
+  const newVisitors = await db.select().from(visitorsTable).where(eq(visitorsTable.id, visitorId)).limit(1);
+  visitor = newVisitors[0];
+} else {
+  // Same person — only fill in missing fields, NEVER overwrite existing data
+  const visitorUpdates: Record<string, unknown> = { updatedAt: new Date() };
+  if (email && !visitor.email) visitorUpdates.email = email;
+  if (phone && !visitor.phone) visitorUpdates.phone = phone;
+  if (nationalId && !visitor.nationalIdNumber) visitorUpdates.nationalIdNumber = nationalId;
+  if (companyName && !visitor.companyName) visitorUpdates.companyName = companyName;
+
+  if (Object.keys(visitorUpdates).length > 1) {
+    await db.update(visitorsTable).set(visitorUpdates as any).where(eq(visitorsTable.id, visitor.id));
+  }
+}
+
+Apply the same fix in artifacts/api-server/src/routes/visitRequests.ts where it also has a "Create or find visitor" section.

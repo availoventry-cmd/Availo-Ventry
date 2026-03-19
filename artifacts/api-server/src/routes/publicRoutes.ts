@@ -58,9 +58,13 @@ router.post("/orgs/:slug/book", async (req, res) => {
     }
 
     // Find or create visitor
-    let visitor = phone
-      ? (await db.select().from(visitorsTable).where(eq(visitorsTable.phone, phone)).limit(1))[0]
-      : null;
+    let visitor: typeof visitorsTable.$inferSelect | null = null;
+    if (phone || email) {
+      const candidates = phone
+        ? await db.select().from(visitorsTable).where(eq(visitorsTable.phone, phone))
+        : await db.select().from(visitorsTable).where(eq(visitorsTable.email, email));
+      visitor = candidates.find(v => v.fullName.toLowerCase().trim() === visitorName.toLowerCase().trim()) || null;
+    }
 
     if (!visitor) {
       const visitorId = generateId();
@@ -79,13 +83,13 @@ router.post("/orgs/:slug/book", async (req, res) => {
       visitor = newVisitors[0];
     } else {
       const visitorUpdates: Record<string, unknown> = { updatedAt: new Date() };
-      if (visitorName && visitorName !== visitor.fullName) visitorUpdates.fullName = visitorName;
       if (email && !visitor.email) visitorUpdates.email = email;
+      if (phone && !visitor.phone) visitorUpdates.phone = phone;
       if (nationalId && !visitor.nationalIdNumber) visitorUpdates.nationalIdNumber = nationalId;
       if (companyName && !visitor.companyName) visitorUpdates.companyName = companyName;
 
       if (Object.keys(visitorUpdates).length > 1) {
-        await db.update(visitorsTable).set(visitorUpdates as Partial<typeof visitorsTable.$inferInsert>)
+        await db.update(visitorsTable).set(visitorUpdates as any)
           .where(eq(visitorsTable.id, visitor.id));
       }
     }

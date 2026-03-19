@@ -55,9 +55,28 @@ router.get("/", requireAuth, requireRole("super_admin"), async (req, res) => {
       orgs = orgs.filter(o => o.name.toLowerCase().includes(s) || (o.nameAr || "").toLowerCase().includes(s));
     }
 
+    const userCounts = await db.select({
+      orgId: usersTable.orgId,
+      cnt: count(),
+    }).from(usersTable).groupBy(usersTable.orgId);
+    const userCountMap = new Map(userCounts.map(uc => [uc.orgId, uc.cnt]));
+
+    const orgAdmins = await db.select({
+      orgId: usersTable.orgId,
+      name: usersTable.name,
+      email: usersTable.email,
+    }).from(usersTable).where(eq(usersTable.role, "org_admin"));
+    const adminMap = new Map(orgAdmins.map(a => [a.orgId, { name: a.name, email: a.email }]));
+
+    const enrichedOrgs = orgs.map(o => ({
+      ...o,
+      userCount: userCountMap.get(o.id) || 0,
+      orgAdmin: adminMap.get(o.id) || null,
+    }));
+
     const p = parseInt(page as string);
     const l = parseInt(limit as string);
-    res.json(paginate(orgs, p, l));
+    res.json(paginate(enrichedOrgs, p, l));
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error" });
   }
@@ -204,12 +223,20 @@ router.put("/:orgId", requireAuth, async (req, res) => {
       return;
     }
 
-    const allowedFields = [
+    const orgAdminFields = [
       "name", "nameAr", "logo", "address", "publicBookingSlug",
       "verificationPolicy", "nafathEnabled", "otpEnabled", "verificationBypassForTrusted",
       "telegramChatId", "primaryContactName", "primaryContactEmail", "primaryContactPhone",
       "setupWizardCompleted",
     ];
+
+    const superAdminFields = [
+      ...orgAdminFields,
+      "type", "subscriptionTier", "maxUsers", "maxBranches",
+      "contractStartDate", "contractEndDate", "status",
+    ];
+
+    const allowedFields = req.user!.role === "super_admin" ? superAdminFields : orgAdminFields;
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     for (const field of allowedFields) {
@@ -301,6 +328,57 @@ router.get("/:orgId/stats", requireAuth, async (req, res) => {
       checkedInNow: checkedIn,
     });
   } catch (err) {
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// POST /api/organizations/:orgId/resend-admin-invite
+router.post("/:orgId/resend-admin-invite", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const { orgId } = req.params;
+
+    const invitations = await db.select().from(invitationsTable)
+      .where(and(
+        eq(invitationsTable.orgId, orgId),
+        eq(invitationsTable.role, "org_admin"),
+        eq(invitationsTable.status, "pending")
+      ))
+      .limit(1);
+
+    if (!invitations[0]) {
+      res.status(404).json({ error: "No pending admin invitation found" });
+      return;
+    }
+
+    const inv = invitations[0];
+    const newToken = generateToken();
+
+    await db.update(invitationsTable).set({
+      invitationToken: newToken,
+      tokenExpiresAt: addDays(new Date(), 3),
+      resendCount: inv.resendCount + 1,
+      lastResentAt: new Date(),
+    }).where(eq(invitationsTable.id, inv.id));
+
+    const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+    const baseUrl = getBaseUrl(req);
+    const invitationLink = `${baseUrl}/accept-invitation?token=${newToken}`;
+
+    await sendEmail({
+      to: inv.email,
+      subject: `Reminder: You're invited to manage ${org?.name || "an organization"} on Availo Ventry`,
+      html: buildInvitationEmail({
+        recipientName: inv.name,
+        organizationName: org?.name || "an organization",
+        role: "org_admin",
+        invitationLink,
+        expiresInDays: 3,
+      }),
+    });
+
+    res.json({ success: true, message: "Admin invitation resent", invitationLink });
+  } catch (err) {
+    console.error("Resend admin invite error:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });

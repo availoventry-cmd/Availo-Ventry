@@ -1,0 +1,497 @@
+# Organization Edit, Detail View & Management Improvements
+
+## Overview
+The super admin currently can only create organizations and change their status (activate/suspend/deactivate). There is NO way to edit an organization's details after creation. Add a full edit capability plus a detail view.
+
+## IMPORTANT CONSTRAINTS
+- Do NOT delete or recreate existing tables or schemas.
+- Do NOT break existing create/status flows.
+- The `useUpdateOrganization` hook already exists in the generated API client. Use it.
+- Keep all existing functionality working.
+
+---
+
+## PART 1: Backend — Expand Allowed Update Fields
+
+### Update `artifacts/api-server/src/routes/organizations.ts`
+
+In the `PUT /:orgId` handler, the `allowedFields` array currently limits what can be updated. Expand it for super_admin to also allow editing type, subscriptionTier, maxUsers, maxBranches, contractStartDate, contractEndDate.
+
+Replace the allowedFields logic with role-based field access:
+
+```typescript
+// Fields that org_admin can edit (their own org settings)
+const orgAdminFields = [
+  "name", "nameAr", "logo", "address", "publicBookingSlug",
+  "verificationPolicy", "nafathEnabled", "otpEnabled", "verificationBypassForTrusted",
+  "telegramChatId", "primaryContactName", "primaryContactEmail", "primaryContactPhone",
+  "setupWizardCompleted",
+];
+
+// Additional fields that only super_admin can edit
+const superAdminFields = [
+  ...orgAdminFields,
+  "type", "subscriptionTier", "maxUsers", "maxBranches",
+  "contractStartDate", "contractEndDate", "status",
+];
+
+const allowedFields = req.user!.role === "super_admin" ? superAdminFields : orgAdminFields;
+```
+
+---
+
+## PART 2: Update OpenAPI Spec
+
+In `lib/api-spec/openapi.yaml`, find the `UpdateOrganizationRequest` schema and add the missing fields:
+
+```yaml
+    UpdateOrganizationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        nameAr:
+          type: string
+          nullable: true
+        logo:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        type:
+          $ref: "#/components/schemas/OrgType"
+        subscriptionTier:
+          $ref: "#/components/schemas/SubscriptionTier"
+        maxUsers:
+          type: integer
+        maxBranches:
+          type: integer
+        contractStartDate:
+          type: string
+          nullable: true
+        contractEndDate:
+          type: string
+          nullable: true
+        publicBookingSlug:
+          type: string
+          nullable: true
+        verificationPolicy:
+          $ref: "#/components/schemas/VerificationPolicy"
+        nafathEnabled:
+          type: boolean
+        otpEnabled:
+          type: boolean
+        verificationBypassForTrusted:
+          type: boolean
+        telegramChatId:
+          type: string
+          nullable: true
+        primaryContactName:
+          type: string
+          nullable: true
+        primaryContactEmail:
+          type: string
+          nullable: true
+        primaryContactPhone:
+          type: string
+          nullable: true
+        setupWizardCompleted:
+          type: boolean
+```
+
+Then regenerate the API client:
+```bash
+pnpm --filter @workspace/api-spec run codegen
+```
+
+---
+
+## PART 3: Frontend — Add Edit Organization Dialog
+
+Update `artifacts/ventry/src/pages/super-admin/organizations.tsx`:
+
+### 3a. Add state for edit dialog
+
+```typescript
+import { useUpdateOrganization } from "@workspace/api-client-react";
+import { Pencil, Eye } from "lucide-react"; // add to existing imports
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+
+// Add state:
+const [editOpen, setEditOpen] = useState(false);
+const [editOrg, setEditOrg] = useState<any>(null);
+const [editForm, setEditForm] = useState({
+  name: "", nameAr: "", type: "government", subscriptionTier: "starter",
+  address: "", publicBookingSlug: "",
+  maxUsers: 20, maxBranches: 5,
+  contractStartDate: "", contractEndDate: "",
+  primaryContactName: "", primaryContactEmail: "", primaryContactPhone: "",
+});
+
+const updateMutation = useUpdateOrganization();
+```
+
+### 3b. Add open edit handler
+
+```typescript
+const openEdit = (org: any) => {
+  setEditOrg(org);
+  setEditForm({
+    name: org.name || "",
+    nameAr: org.nameAr || "",
+    type: org.type || "government",
+    subscriptionTier: org.subscriptionTier || "starter",
+    address: org.address || "",
+    publicBookingSlug: org.publicBookingSlug || "",
+    maxUsers: org.maxUsers || 20,
+    maxBranches: org.maxBranches || 5,
+    contractStartDate: org.contractStartDate || "",
+    contractEndDate: org.contractEndDate || "",
+    primaryContactName: org.primaryContactName || "",
+    primaryContactEmail: org.primaryContactEmail || "",
+    primaryContactPhone: org.primaryContactPhone || "",
+  });
+  setEditOpen(true);
+};
+```
+
+### 3c. Add save handler
+
+```typescript
+const handleSave = async () => {
+  if (!editOrg) return;
+  try {
+    await updateMutation.mutateAsync({ orgId: editOrg.id, data: editForm });
+    toast({ title: "Organization Updated", description: `${editForm.name} has been updated.` });
+    setEditOpen(false);
+    setEditOrg(null);
+    refetch();
+  } catch {
+    toast({ title: "Failed", description: "Could not update organization.", variant: "destructive" });
+  }
+};
+```
+
+### 3d. Add "Edit" to the dropdown menu
+
+In the DropdownMenuContent for each org row, add an "Edit" option at the TOP (before the status actions):
+
+```tsx
+<DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => openEdit(org)}>
+  <Pencil className="w-4 h-4 text-blue-500" /> Edit Details
+</DropdownMenuItem>
+```
+
+Also make clicking on the organization name in the table open the edit dialog:
+
+```tsx
+<p className="font-semibold text-foreground cursor-pointer hover:text-primary hover:underline" onClick={() => openEdit(org)}>
+  {org.name}
+</p>
+```
+
+### 3e. Add the Edit Dialog
+
+Add this dialog component after the existing Create Dialog. Use Tabs to organize the fields into logical sections:
+
+```tsx
+{/* Edit Dialog */}
+<Dialog open={editOpen} onOpenChange={setEditOpen}>
+  <DialogContent className="rounded-2xl max-w-2xl max-h-[85vh] overflow-y-auto">
+    <DialogHeader>
+      <DialogTitle className="font-display text-xl">Edit Organization</DialogTitle>
+      <DialogDescription>Update organization details. Changes are saved immediately.</DialogDescription>
+    </DialogHeader>
+    <Tabs defaultValue="general" className="w-full">
+      <TabsList className="w-full grid grid-cols-3 rounded-xl">
+        <TabsTrigger value="general" className="rounded-lg">General</TabsTrigger>
+        <TabsTrigger value="subscription" className="rounded-lg">Subscription</TabsTrigger>
+        <TabsTrigger value="contact" className="rounded-lg">Contact</TabsTrigger>
+      </TabsList>
+
+      {/* General Tab */}
+      <TabsContent value="general" className="space-y-4 mt-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Organization Name *</Label>
+            <Input className="rounded-xl" value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Arabic Name</Label>
+            <Input className="rounded-xl" value={editForm.nameAr} onChange={e => setEditForm(f => ({ ...f, nameAr: e.target.value }))} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={editForm.type} onValueChange={v => setEditForm(f => ({ ...f, type: v }))}>
+              <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="government">Government</SelectItem>
+                <SelectItem value="enterprise">Enterprise</SelectItem>
+                <SelectItem value="smb">SMB</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Public Booking Slug</Label>
+            <Input className="rounded-xl" placeholder="my-org" value={editForm.publicBookingSlug} onChange={e => setEditForm(f => ({ ...f, publicBookingSlug: e.target.value }))} />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Address</Label>
+          <Input className="rounded-xl" placeholder="Full address" value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} />
+        </div>
+      </TabsContent>
+
+      {/* Subscription Tab */}
+      <TabsContent value="subscription" className="space-y-4 mt-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Subscription Tier</Label>
+            <Select value={editForm.subscriptionTier} onValueChange={v => setEditForm(f => ({ ...f, subscriptionTier: v }))}>
+              <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="starter">Starter</SelectItem>
+                <SelectItem value="professional">Professional</SelectItem>
+                <SelectItem value="enterprise">Enterprise</SelectItem>
+                <SelectItem value="government">Government</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Max Users</Label>
+            <Input type="number" className="rounded-xl" value={editForm.maxUsers} onChange={e => setEditForm(f => ({ ...f, maxUsers: parseInt(e.target.value) || 0 }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Max Branches</Label>
+            <Input type="number" className="rounded-xl" value={editForm.maxBranches} onChange={e => setEditForm(f => ({ ...f, maxBranches: parseInt(e.target.value) || 0 }))} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Contract Start</Label>
+            <Input type="date" className="rounded-xl" value={editForm.contractStartDate} onChange={e => setEditForm(f => ({ ...f, contractStartDate: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Contract End</Label>
+            <Input type="date" className="rounded-xl" value={editForm.contractEndDate} onChange={e => setEditForm(f => ({ ...f, contractEndDate: e.target.value }))} />
+          </div>
+        </div>
+      </TabsContent>
+
+      {/* Contact Tab */}
+      <TabsContent value="contact" className="space-y-4 mt-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Contact Name</Label>
+            <Input className="rounded-xl" value={editForm.primaryContactName} onChange={e => setEditForm(f => ({ ...f, primaryContactName: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Contact Email</Label>
+            <Input type="email" className="rounded-xl" value={editForm.primaryContactEmail} onChange={e => setEditForm(f => ({ ...f, primaryContactEmail: e.target.value }))} />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Contact Phone</Label>
+          <Input className="rounded-xl" value={editForm.primaryContactPhone} onChange={e => setEditForm(f => ({ ...f, primaryContactPhone: e.target.value }))} />
+        </div>
+      </TabsContent>
+    </Tabs>
+
+    <DialogFooter className="mt-4">
+      <Button variant="outline" className="rounded-xl" onClick={() => setEditOpen(false)}>Cancel</Button>
+      <Button className="rounded-xl" onClick={handleSave} disabled={updateMutation.isPending}>
+        {updateMutation.isPending ? "Saving..." : "Save Changes"}
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+```
+
+---
+
+## PART 4: Recommended Additional Improvements
+
+### 4a. Show admin info and user count in org table
+
+Update the organizations table to show more useful info. Add a "Users" column that shows the user count for each org. To do this:
+
+In the backend GET `/api/organizations` route, for each org, count the users. Update the response to include `userCount` for each org:
+
+```typescript
+// After fetching orgs, get user counts
+const userCounts = await db.select({ 
+  orgId: usersTable.orgId, 
+  count: count() 
+}).from(usersTable).groupBy(usersTable.orgId);
+
+const userCountMap = new Map(userCounts.map(uc => [uc.orgId, uc.count]));
+
+// Map orgs to include count
+const enrichedOrgs = orgs.map(o => ({
+  ...o,
+  userCount: userCountMap.get(o.id) || 0,
+}));
+```
+
+Use `enrichedOrgs` instead of `orgs` in the paginate call.
+
+In the frontend table, add a "Users" column:
+```tsx
+<th className="text-left p-4 font-semibold text-slate-600">Users</th>
+// and in the row:
+<td className="p-4 text-slate-600 text-sm font-medium">{org.userCount || 0}</td>
+```
+
+### 4b. Show org admin name in org list
+
+In the backend GET `/api/organizations` route, also fetch the org admin for each org:
+
+```typescript
+import { usersTable } from "@workspace/db";
+
+// After enriching with user counts, also fetch org admins
+const orgAdmins = await db.select({
+  orgId: usersTable.orgId,
+  name: usersTable.name,
+  email: usersTable.email,
+}).from(usersTable).where(eq(usersTable.role, "org_admin"));
+
+const adminMap = new Map(orgAdmins.map(a => [a.orgId, { name: a.name, email: a.email }]));
+
+// Add to enriched orgs
+const enrichedOrgs = orgs.map(o => ({
+  ...o,
+  userCount: userCountMap.get(o.id) || 0,
+  orgAdmin: adminMap.get(o.id) || null,
+}));
+```
+
+In the frontend table, update the Contact column to show the org admin if primaryContactEmail is empty:
+```tsx
+<td className="p-4 text-xs">
+  <div>
+    <p className="text-slate-700 font-medium">{org.orgAdmin?.name || org.primaryContactName || "—"}</p>
+    <p className="text-slate-500">{org.orgAdmin?.email || org.primaryContactEmail || ""}</p>
+  </div>
+</td>
+```
+
+### 4c. Resend admin invitation from org dropdown
+
+Add a "Resend Admin Invitation" option in the dropdown menu for orgs that are still in "pending_setup" status. This helps when the first admin didn't receive or lost their invitation email.
+
+In the dropdown menu:
+```tsx
+{org.status === "pending_setup" && (
+  <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleResendAdminInvite(org.id, org.name)}>
+    <RefreshCw className="w-4 h-4 text-blue-500" /> Resend Admin Invitation
+  </DropdownMenuItem>
+)}
+```
+
+Create a handler that calls POST `/api/organizations/:orgId/resend-admin-invite`.
+
+Create this endpoint in the backend `organizations.ts`:
+```typescript
+// POST /api/organizations/:orgId/resend-admin-invite
+router.post("/:orgId/resend-admin-invite", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    
+    // Find the pending org_admin invitation for this org
+    const invitations = await db.select().from(invitationsTable)
+      .where(and(
+        eq(invitationsTable.orgId, orgId),
+        eq(invitationsTable.role, "org_admin"),
+        eq(invitationsTable.status, "pending")
+      ))
+      .limit(1);
+    
+    if (!invitations[0]) {
+      res.status(404).json({ error: "No pending admin invitation found" });
+      return;
+    }
+
+    const inv = invitations[0];
+    const newToken = generateToken();
+    
+    await db.update(invitationsTable).set({
+      invitationToken: newToken,
+      tokenExpiresAt: addDays(new Date(), 3),
+      resendCount: inv.resendCount + 1,
+      lastResentAt: new Date(),
+    }).where(eq(invitationsTable.id, inv.id));
+
+    // Send email
+    const { sendEmail, buildInvitationEmail, getBaseUrl } = await import("../lib/email.js");
+    const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+    const baseUrl = getBaseUrl(req);
+    const invitationLink = `${baseUrl}/accept-invitation?token=${newToken}`;
+
+    await sendEmail({
+      to: inv.email,
+      subject: `Reminder: You're invited to manage ${org?.name || "an organization"} on Availo Ventry`,
+      html: buildInvitationEmail({
+        recipientName: inv.name,
+        organizationName: org?.name || "an organization",
+        role: "org_admin",
+        invitationLink,
+        expiresInDays: 3,
+      }),
+    });
+
+    res.json({ success: true, message: "Admin invitation resent", invitationLink });
+  } catch (err) {
+    console.error("Resend admin invite error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+```
+
+For the frontend handler, use a direct fetch call:
+```typescript
+const handleResendAdminInvite = async (orgId: string, name: string) => {
+  try {
+    const res = await fetch(`/api/organizations/${orgId}/resend-admin-invite`, { 
+      method: "POST", credentials: "include" 
+    });
+    if (res.ok) {
+      toast({ title: "Invitation Resent", description: `Admin invitation for ${name} has been resent.` });
+    } else {
+      const err = await res.json();
+      toast({ title: "Failed", description: err.error || "Could not resend.", variant: "destructive" });
+    }
+  } catch {
+    toast({ title: "Failed", description: "Could not resend invitation.", variant: "destructive" });
+  }
+};
+```
+
+---
+
+## Summary of Files to Modify
+
+- `artifacts/api-server/src/routes/organizations.ts` — expand PUT allowed fields for super_admin, add user counts + admin info to GET list, add resend-admin-invite endpoint
+- `artifacts/ventry/src/pages/super-admin/organizations.tsx` — add Edit dialog with tabs, add Edit to dropdown, clickable org names, resend invite button, users column
+- `lib/api-spec/openapi.yaml` — add missing fields to UpdateOrganizationRequest, add resend-admin-invite endpoint
+
+## Execution Order
+1. Update backend organizations.ts (expand PUT fields + enrich GET list + resend endpoint)
+2. Update openapi.yaml and regenerate client
+3. Update frontend organizations.tsx (edit dialog + dropdown + table columns)
+4. Test: click Edit on an org → change type/tier/contact → save → verify changes persist
+5. Test: click org name → edit dialog opens
+6. Test: click Resend Admin Invitation on a pending_setup org → check email arrives
+7. Test: verify Users column shows correct counts
+
+## Do NOT Change
+- Any other pages or components
+- Database schemas
+- Auth middleware
+- Any routes other than organizations.ts

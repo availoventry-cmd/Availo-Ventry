@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { useListOrganizations, useUpdateOrganizationStatus, useCreateOrganization } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useListOrganizations, useUpdateOrganizationStatus, useCreateOrganization, useUpdateOrganization, useResendAdminInvite } from "@workspace/api-client-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, Search, Plus, CheckCircle2, Ban, RefreshCw, MoreHorizontal } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Building2, Search, Plus, CheckCircle2, Ban, RefreshCw, MoreHorizontal, Pencil, Users, Mail } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
 
 const statusColor: Record<string, string> = {
@@ -39,6 +40,16 @@ export default function SuperAdminOrganizations() {
     firstAdminPassword: "",
   });
 
+  const [editOpen, setEditOpen] = useState(false);
+  const [editOrg, setEditOrg] = useState<any>(null);
+  const [editForm, setEditForm] = useState({
+    name: "", nameAr: "", type: "government", subscriptionTier: "starter",
+    address: "", publicBookingSlug: "",
+    maxUsers: 20, maxBranches: 5,
+    contractStartDate: "", contractEndDate: "",
+    primaryContactName: "", primaryContactEmail: "", primaryContactPhone: "",
+  });
+
   const { data, isLoading, refetch } = useListOrganizations({
     ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     ...(search ? { search } : {}),
@@ -47,6 +58,8 @@ export default function SuperAdminOrganizations() {
 
   const statusMutation = useUpdateOrganizationStatus();
   const createMutation = useCreateOrganization();
+  const updateMutation = useUpdateOrganization();
+  const resendMutation = useResendAdminInvite();
 
   const handleStatusChange = async (orgId: string, status: string, name: string) => {
     try {
@@ -86,6 +99,48 @@ export default function SuperAdminOrganizations() {
     }
   };
 
+  const openEdit = (org: any) => {
+    setEditOrg(org);
+    setEditForm({
+      name: org.name || "",
+      nameAr: org.nameAr || "",
+      type: org.type || "government",
+      subscriptionTier: org.subscriptionTier || "starter",
+      address: org.address || "",
+      publicBookingSlug: org.publicBookingSlug || "",
+      maxUsers: org.maxUsers || 20,
+      maxBranches: org.maxBranches || 5,
+      contractStartDate: org.contractStartDate || "",
+      contractEndDate: org.contractEndDate || "",
+      primaryContactName: org.primaryContactName || "",
+      primaryContactEmail: org.primaryContactEmail || "",
+      primaryContactPhone: org.primaryContactPhone || "",
+    });
+    setEditOpen(true);
+  };
+
+  const handleSave = async () => {
+    if (!editOrg) return;
+    try {
+      await updateMutation.mutateAsync({ orgId: editOrg.id, data: editForm });
+      toast({ title: "Organization Updated", description: `${editForm.name} has been updated.` });
+      setEditOpen(false);
+      setEditOrg(null);
+      refetch();
+    } catch {
+      toast({ title: "Failed", description: "Could not update organization.", variant: "destructive" });
+    }
+  };
+
+  const handleResendAdminInvite = async (orgId: string, name: string) => {
+    try {
+      await resendMutation.mutateAsync({ orgId });
+      toast({ title: "Invitation Resent", description: `Admin invitation for ${name} has been resent.` });
+    } catch {
+      toast({ title: "Failed", description: "Could not resend invitation.", variant: "destructive" });
+    }
+  };
+
   const orgs = data?.data ?? [];
 
   return (
@@ -101,7 +156,6 @@ export default function SuperAdminOrganizations() {
         </Button>
       </div>
 
-      {/* Filters */}
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
@@ -126,7 +180,6 @@ export default function SuperAdminOrganizations() {
         </Select>
       </div>
 
-      {/* Table */}
       <Card className="border-border/50 shadow-sm rounded-2xl overflow-hidden">
         <CardContent className="p-0">
           {isLoading ? (
@@ -145,13 +198,14 @@ export default function SuperAdminOrganizations() {
                     <th className="text-left p-4 font-semibold text-slate-600">Type</th>
                     <th className="text-left p-4 font-semibold text-slate-600">Tier</th>
                     <th className="text-left p-4 font-semibold text-slate-600">Status</th>
-                    <th className="text-left p-4 font-semibold text-slate-600">Contact</th>
+                    <th className="text-left p-4 font-semibold text-slate-600">Users</th>
+                    <th className="text-left p-4 font-semibold text-slate-600">Admin / Contact</th>
                     <th className="text-left p-4 font-semibold text-slate-600">Created</th>
                     <th className="p-4 w-12"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {orgs.map(org => (
+                  {orgs.map((org: any) => (
                     <tr key={org.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="p-4">
                         <div className="flex items-center gap-3">
@@ -159,7 +213,9 @@ export default function SuperAdminOrganizations() {
                             {org.name.charAt(0)}
                           </div>
                           <div>
-                            <p className="font-semibold text-foreground">{org.name}</p>
+                            <p className="font-semibold text-foreground cursor-pointer hover:text-primary hover:underline" onClick={() => openEdit(org)}>
+                              {org.name}
+                            </p>
                             {org.nameAr && <p className="text-xs text-muted-foreground">{org.nameAr}</p>}
                           </div>
                         </div>
@@ -175,8 +231,17 @@ export default function SuperAdminOrganizations() {
                           {org.status.replace("_", " ")}
                         </span>
                       </td>
-                      <td className="p-4 text-slate-600 text-xs">
-                        {org.primaryContactEmail || <span className="text-slate-400">—</span>}
+                      <td className="p-4">
+                        <div className="flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5 text-slate-400" />
+                          <span className="text-slate-600 font-medium">{org.userCount ?? 0}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-xs">
+                        <div>
+                          <p className="text-slate-700 font-medium">{org.orgAdmin?.name || org.primaryContactName || "—"}</p>
+                          <p className="text-slate-500">{org.orgAdmin?.email || org.primaryContactEmail || ""}</p>
+                        </div>
                       </td>
                       <td className="p-4 text-slate-500 text-xs">
                         {new Date(org.createdAt).toLocaleDateString()}
@@ -189,6 +254,15 @@ export default function SuperAdminOrganizations() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="rounded-xl">
+                            <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => openEdit(org)}>
+                              <Pencil className="w-4 h-4 text-blue-500" /> Edit Details
+                            </DropdownMenuItem>
+                            {org.status === "pending_setup" && (
+                              <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleResendAdminInvite(org.id, org.name)}>
+                                <Mail className="w-4 h-4 text-blue-500" /> Resend Admin Invitation
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
                             {org.status !== "active" && (
                               <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleStatusChange(org.id, "active", org.name)}>
                                 <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Activate
@@ -297,6 +371,118 @@ export default function SuperAdminOrganizations() {
             <Button variant="outline" className="rounded-xl" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button className="rounded-xl" onClick={handleCreate} disabled={createMutation.isPending}>
               {createMutation.isPending ? "Creating..." : "Create Organization"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="rounded-2xl max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">Edit Organization</DialogTitle>
+            <DialogDescription>Update organization details. Changes are saved immediately.</DialogDescription>
+          </DialogHeader>
+          <Tabs defaultValue="general" className="w-full">
+            <TabsList className="w-full grid grid-cols-3 rounded-xl">
+              <TabsTrigger value="general" className="rounded-lg">General</TabsTrigger>
+              <TabsTrigger value="subscription" className="rounded-lg">Subscription</TabsTrigger>
+              <TabsTrigger value="contact" className="rounded-lg">Contact</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="general" className="space-y-4 mt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Organization Name *</Label>
+                  <Input className="rounded-xl" value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Arabic Name</Label>
+                  <Input className="rounded-xl" value={editForm.nameAr} onChange={e => setEditForm(f => ({ ...f, nameAr: e.target.value }))} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Type</Label>
+                  <Select value={editForm.type} onValueChange={v => setEditForm(f => ({ ...f, type: v }))}>
+                    <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="government">Government</SelectItem>
+                      <SelectItem value="enterprise">Enterprise</SelectItem>
+                      <SelectItem value="smb">SMB</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Public Booking Slug</Label>
+                  <Input className="rounded-xl" placeholder="my-org" value={editForm.publicBookingSlug} onChange={e => setEditForm(f => ({ ...f, publicBookingSlug: e.target.value }))} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Address</Label>
+                <Input className="rounded-xl" placeholder="Full address" value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="subscription" className="space-y-4 mt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Subscription Tier</Label>
+                  <Select value={editForm.subscriptionTier} onValueChange={v => setEditForm(f => ({ ...f, subscriptionTier: v }))}>
+                    <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="starter">Starter</SelectItem>
+                      <SelectItem value="professional">Professional</SelectItem>
+                      <SelectItem value="enterprise">Enterprise</SelectItem>
+                      <SelectItem value="government">Government</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Max Users</Label>
+                  <Input type="number" className="rounded-xl" value={editForm.maxUsers} onChange={e => setEditForm(f => ({ ...f, maxUsers: parseInt(e.target.value) || 0 }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Max Branches</Label>
+                  <Input type="number" className="rounded-xl" value={editForm.maxBranches} onChange={e => setEditForm(f => ({ ...f, maxBranches: parseInt(e.target.value) || 0 }))} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Contract Start</Label>
+                  <Input type="date" className="rounded-xl" value={editForm.contractStartDate} onChange={e => setEditForm(f => ({ ...f, contractStartDate: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Contract End</Label>
+                  <Input type="date" className="rounded-xl" value={editForm.contractEndDate} onChange={e => setEditForm(f => ({ ...f, contractEndDate: e.target.value }))} />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="contact" className="space-y-4 mt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Contact Name</Label>
+                  <Input className="rounded-xl" value={editForm.primaryContactName} onChange={e => setEditForm(f => ({ ...f, primaryContactName: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Contact Email</Label>
+                  <Input type="email" className="rounded-xl" value={editForm.primaryContactEmail} onChange={e => setEditForm(f => ({ ...f, primaryContactEmail: e.target.value }))} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Contact Phone</Label>
+                <Input className="rounded-xl" value={editForm.primaryContactPhone} onChange={e => setEditForm(f => ({ ...f, primaryContactPhone: e.target.value }))} />
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          <DialogFooter className="mt-4">
+            <Button variant="outline" className="rounded-xl" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button className="rounded-xl" onClick={handleSave} disabled={updateMutation.isPending}>
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

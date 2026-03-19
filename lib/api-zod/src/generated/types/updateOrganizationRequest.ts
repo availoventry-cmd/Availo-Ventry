@@ -5,6 +5,8 @@
  * Availo Ventry - Smart Visitor Management Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { OrgType } from "./orgType";
+import type { SubscriptionTier } from "./subscriptionTier";
 import type { VerificationPolicy } from "./verificationPolicy";
 
 export interface UpdateOrganizationRequest {
@@ -12,6 +14,12 @@ export interface UpdateOrganizationRequest {
   nameAr?: string | null;
   logo?: string | null;
   address?: string | null;
+  type?: OrgType;
+  subscriptionTier?: SubscriptionTier;
+  maxUsers?: number;
+  maxBranches?: number;
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
   publicBookingSlug?: string | null;
   verificationPolicy?: VerificationPolicy;
   nafathEnabled?: boolean;

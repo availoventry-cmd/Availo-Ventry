@@ -352,6 +352,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/Organization"
 
+  /organizations/{orgId}/resend-admin-invite:
+    post:
+      operationId: resendAdminInvite
+      tags: [organizations]
+      summary: Resend admin invitation for a pending_setup organization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+      responses:
+        "200":
+          description: Invitation resent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "404":
+          description: No pending admin invitation found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /organizations/{orgId}/stats:
     get:
       operationId: getOrganizationStats
@@ -1848,6 +1871,20 @@ components:
           type: string
           nullable: true
         address:
+          type: string
+          nullable: true
+        type:
+          $ref: "#/components/schemas/OrgType"
+        subscriptionTier:
+          $ref: "#/components/schemas/SubscriptionTier"
+        maxUsers:
+          type: integer
+        maxBranches:
+          type: integer
+        contractStartDate:
+          type: string
+          nullable: true
+        contractEndDate:
           type: string
           nullable: true
         publicBookingSlug:

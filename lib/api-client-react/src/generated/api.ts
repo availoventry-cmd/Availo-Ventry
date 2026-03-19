@@ -1298,6 +1298,90 @@ export const useUpdateOrganizationStatus = <
 };
 
 /**
+ * @summary Resend admin invitation for a pending_setup organization
+ */
+export const getResendAdminInviteUrl = (orgId: string) => {
+  return `/api/organizations/${orgId}/resend-admin-invite`;
+};
+
+export const resendAdminInvite = async (
+  orgId: string,
+  options?: RequestInit,
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getResendAdminInviteUrl(orgId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResendAdminInviteMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendAdminInvite>>,
+    TError,
+    { orgId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resendAdminInvite>>,
+  TError,
+  { orgId: string },
+  TContext
+> => {
+  const mutationKey = ["resendAdminInvite"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resendAdminInvite>>,
+    { orgId: string }
+  > = (props) => {
+    const { orgId } = props ?? {};
+
+    return resendAdminInvite(orgId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResendAdminInviteMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resendAdminInvite>>
+>;
+
+export type ResendAdminInviteMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Resend admin invitation for a pending_setup organization
+ */
+export const useResendAdminInvite = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendAdminInvite>>,
+    TError,
+    { orgId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resendAdminInvite>>,
+  TError,
+  { orgId: string },
+  TContext
+> => {
+  return useMutation(getResendAdminInviteMutationOptions(options));
+};
+
+/**
  * @summary Get organization statistics
  */
 export const getGetOrganizationStatsUrl = (orgId: string) => {

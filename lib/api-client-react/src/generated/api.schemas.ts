@@ -215,6 +215,12 @@ export interface UpdateOrganizationRequest {
   nameAr?: string | null;
   logo?: string | null;
   address?: string | null;
+  type?: OrgType;
+  subscriptionTier?: SubscriptionTier;
+  maxUsers?: number;
+  maxBranches?: number;
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
   publicBookingSlug?: string | null;
   verificationPolicy?: VerificationPolicy;
   nafathEnabled?: boolean;

@@ -343,6 +343,14 @@ export const UpdateOrganizationBody = zod.object({
   nameAr: zod.string().nullish(),
   logo: zod.string().nullish(),
   address: zod.string().nullish(),
+  type: zod.enum(["government", "enterprise", "smb"]).optional(),
+  subscriptionTier: zod
+    .enum(["starter", "professional", "enterprise", "government"])
+    .optional(),
+  maxUsers: zod.number().optional(),
+  maxBranches: zod.number().optional(),
+  contractStartDate: zod.string().nullish(),
+  contractEndDate: zod.string().nullish(),
   publicBookingSlug: zod.string().nullish(),
   verificationPolicy: zod
     .enum([
@@ -451,6 +459,18 @@ export const UpdateOrganizationStatusResponse = zod.object({
   setupWizardCompleted: zod.boolean(),
   createdAt: zod.date(),
   updatedAt: zod.date(),
+});
+
+/**
+ * @summary Resend admin invitation for a pending_setup organization
+ */
+export const ResendAdminInviteParams = zod.object({
+  orgId: zod.coerce.string(),
+});
+
+export const ResendAdminInviteResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
 });
 
 /**

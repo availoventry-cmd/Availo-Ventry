@@ -66,7 +66,10 @@ export default function SuperAdminOrganizations() {
     try {
       await statusMutation.mutateAsync({ orgId, data: { status } });
       toast({ title: "Status Updated", description: `${name} is now ${status.replace("_", " ")}.` });
-      refetch();
+      queryClient.invalidateQueries({ predicate: (query) => {
+        const key = query.queryKey[0];
+        return typeof key === "string" && key.startsWith("/api/organizations");
+      }});
     } catch {
       toast({ title: "Failed", description: "Could not update status.", variant: "destructive" });
     }
@@ -123,11 +126,14 @@ export default function SuperAdminOrganizations() {
   const handleSave = async () => {
     if (!editOrg) return;
     try {
-      await updateMutation.mutateAsync({ orgId: editOrg.id, data: editForm });
+      const updated = await updateMutation.mutateAsync({ orgId: editOrg.id, data: editForm });
       toast({ title: "Organization Updated", description: `${editForm.name} has been updated.` });
+      setEditOrg(updated);
       setEditOpen(false);
-      setEditOrg(null);
-      refetch();
+      queryClient.invalidateQueries({ predicate: (query) => {
+        const key = query.queryKey[0];
+        return typeof key === "string" && key.startsWith("/api/organizations");
+      }});
     } catch {
       toast({ title: "Failed", description: "Could not update organization.", variant: "destructive" });
     }

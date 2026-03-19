@@ -172,6 +172,7 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 
 ### Portal Settings (Org Admin)
 - **Branch CRUD**: Add/edit/toggle branches in Settings → Branches tab
+- **User edit**: Edit any user's name and email via "Edit Details" in dropdown (validates format, checks uniqueness, normalizes to lowercase)
 - **User reactivation**: Inactive users show "Reactivate" option in dropdown with confirmation dialog
 - **Invite with branch**: Branch selector in invite dialog
 - **Last login column**: Users table shows last login date

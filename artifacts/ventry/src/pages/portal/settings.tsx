@@ -11,8 +11,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Save, Plus, UserPlus, Building2, Settings, Users, MoreHorizontal, RotateCcw } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Save, Plus, UserPlus, Building2, Settings, Users, MoreHorizontal, RotateCcw, Pencil } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
 export default function PortalSettings() {
   const { user } = useAuth();
@@ -39,6 +39,10 @@ export default function PortalSettings() {
   });
 
   const [confirmAction, setConfirmAction] = useState<{ type: "deactivate" | "reactivate"; userId: string; userName: string } | null>(null);
+
+  const [editUserDialog, setEditUserDialog] = useState(false);
+  const [editingUser, setEditingUser] = useState<any>(null);
+  const [editUserForm, setEditUserForm] = useState({ name: "", email: "" });
 
   useEffect(() => {
     if (org) {
@@ -112,6 +116,35 @@ export default function PortalSettings() {
       handleReactivate(confirmAction.userId, confirmAction.userName);
     }
     setConfirmAction(null);
+  };
+
+  const openEditUser = (u: any) => {
+    setEditingUser(u);
+    setEditUserForm({ name: u.name || "", email: u.email || "" });
+    setEditUserDialog(true);
+  };
+
+  const handleSaveUser = async () => {
+    if (!editingUser || !editUserForm.name || !editUserForm.email) {
+      toast({ title: "Missing fields", description: "Name and email are required.", variant: "destructive" });
+      return;
+    }
+    try {
+      const res = await fetch(`/api/organizations/${user!.orgId}/users/${editingUser.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ name: editUserForm.name, email: editUserForm.email }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed");
+      }
+      toast({ title: "User Updated", description: `${editUserForm.name}'s details have been updated.` });
+      setEditUserDialog(false);
+      setEditingUser(null);
+      queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/users`] });
+    } catch (e: any) {
+      toast({ title: "Update Failed", description: e.message || "Could not update user.", variant: "destructive" });
+    }
   };
 
   const openBranchDialog = (branch?: any) => {
@@ -307,6 +340,10 @@ export default function PortalSettings() {
                               <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg"><MoreHorizontal className="w-4 h-4" /></Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="rounded-xl">
+                              <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => openEditUser(u)}>
+                                <Pencil className="w-4 h-4" /> Edit Details
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               {u.isActive ? (
                                 <DropdownMenuItem className="text-red-600 cursor-pointer" onClick={() => setConfirmAction({ type: "deactivate", userId: u.id, userName: u.name })}>
                                   Deactivate
@@ -491,6 +528,35 @@ export default function PortalSettings() {
           <DialogFooter>
             <Button variant="outline" className="rounded-xl" onClick={() => setBranchDialog(false)}>Cancel</Button>
             <Button className="rounded-xl" onClick={handleSaveBranch}>{editingBranch ? "Save Changes" : "Create Branch"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editUserDialog} onOpenChange={setEditUserDialog}>
+        <DialogContent className="rounded-2xl max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">Edit User</DialogTitle>
+            <DialogDescription>Update user name and email address.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Full Name</Label>
+              <Input className="rounded-xl" value={editUserForm.name} onChange={e => setEditUserForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Email</Label>
+              <Input type="email" className="rounded-xl" value={editUserForm.email} onChange={e => setEditUserForm(f => ({ ...f, email: e.target.value }))} />
+            </div>
+            {editingUser && (
+              <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-500">
+                <p>Role: <span className="capitalize font-medium text-slate-700">{editingUser.role?.replace(/_/g, " ")}</span></p>
+                <p>Status: <span className={`font-medium ${editingUser.isActive ? "text-emerald-600" : "text-slate-400"}`}>{editingUser.isActive ? "Active" : "Inactive"}</span></p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="rounded-xl" onClick={() => setEditUserDialog(false)}>Cancel</Button>
+            <Button className="rounded-xl" onClick={handleSaveUser}>Save Changes</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

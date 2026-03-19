@@ -81,11 +81,26 @@ router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
 router.put("/:userId", requireAuth, requireOrgAccess, requirePermission("users.manage"), async (req, res) => {
   try {
     const { orgId, userId } = req.params;
-    const { name, nameAr, phone, role, branchId, department, jobTitle } = req.body;
+    const { name, nameAr, email, phone, role, branchId, department, jobTitle } = req.body;
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (name !== undefined) updates.name = name;
     if (nameAr !== undefined) updates.nameAr = nameAr;
+    if (email !== undefined) {
+      const normalizedEmail = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        res.status(400).json({ error: "Invalid email format" });
+        return;
+      }
+      const existing = await db.select({ id: usersTable.id }).from(usersTable)
+        .where(and(eq(usersTable.email, normalizedEmail)))
+        .limit(1);
+      if (existing[0] && existing[0].id !== userId) {
+        res.status(409).json({ error: "Email is already in use by another user" });
+        return;
+      }
+      updates.email = normalizedEmail;
+    }
     if (phone !== undefined) updates.phone = phone;
     if (role !== undefined) updates.role = role;
     if (branchId !== undefined) updates.branchId = branchId;
@@ -96,7 +111,13 @@ router.put("/:userId", requireAuth, requireOrgAccess, requirePermission("users.m
       .set(updates as Partial<typeof usersTable.$inferInsert>)
       .where(and(eq(usersTable.id, userId), eq(usersTable.orgId, orgId)));
 
-    const updated = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    const updated = await db.select().from(usersTable)
+      .where(and(eq(usersTable.id, userId), eq(usersTable.orgId, orgId)))
+      .limit(1);
+    if (!updated[0]) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
     const u = updated[0];
     res.json({
       id: u.id, orgId: u.orgId, branchId: u.branchId, name: u.name, nameAr: u.nameAr,

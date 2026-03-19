@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Building2, Search, Plus, CheckCircle2, Ban, RefreshCw, MoreHorizontal } from "lucide-react";
@@ -207,6 +207,7 @@ export default function SuperAdminOrganizations() {
         <DialogContent className="rounded-2xl max-w-lg">
           <DialogHeader>
             <DialogTitle className="font-display text-xl">New Organization</DialogTitle>
+            <DialogDescription>Register a new organization and create the first admin account.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="grid grid-cols-2 gap-4">

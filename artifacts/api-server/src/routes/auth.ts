@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, usersTable, invitationsTable, organizationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, loadPermissions } from "../lib/auth.js";
+import { requireAuth, loadPermissions, resolveRoleId } from "../lib/auth.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
 import { generateId } from "../lib/id.js";
 
@@ -9,14 +9,24 @@ const router = Router();
 
 async function buildUserResponse(user: typeof usersTable.$inferSelect, orgInfo: typeof organizationsTable.$inferSelect | null) {
   const setupWizardCompleted = user.role === "super_admin" ? true : (orgInfo?.setupWizardCompleted ?? true);
-  const permissions = await loadPermissions(user.role, user.roleId ?? null);
+
+  let roleId = user.roleId ?? null;
+  const SYSTEM_ROLES = ["super_admin", "org_admin"];
+  if (!roleId && !SYSTEM_ROLES.includes(user.role) && user.orgId) {
+    roleId = await resolveRoleId(user.role, user.orgId);
+    if (roleId) {
+      await db.update(usersTable).set({ roleId }).where(eq(usersTable.id, user.id));
+    }
+  }
+
+  const permissions = await loadPermissions(user.role, roleId);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     nameAr: user.nameAr,
     role: user.role,
-    roleId: user.roleId ?? null,
+    roleId,
     orgId: user.orgId,
     branchId: user.branchId,
     department: user.department,

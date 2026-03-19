@@ -280,7 +280,7 @@ router.patch("/:requestId/check-in", requireAuth, requireOrgAccess, requirePermi
 });
 
 // PATCH /api/organizations/:orgId/visit-requests/:requestId/check-out
-router.patch("/:requestId/check-out", requireAuth, requireOrgAccess, requirePermission("visit_requests.check_in"), async (req, res) => {
+router.patch("/:requestId/check-out", requireAuth, requireOrgAccess, requirePermission("visit_requests.check_out"), async (req, res) => {
   try {
     const { orgId, requestId } = req.params;
     await db.update(visitRequestsTable).set({

@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -165,6 +165,9 @@ export default function PortalVisitors() {
             <DialogTitle className="font-display">
               {blacklistDialog.isBlacklisted ? "Remove from Blacklist" : "Blacklist Visitor"}
             </DialogTitle>
+            <DialogDescription>
+              {blacklistDialog.isBlacklisted ? "Remove this visitor from the blacklist." : "Add this visitor to the blacklist."}
+            </DialogDescription>
           </DialogHeader>
           {blacklistDialog.isBlacklisted ? (
             <p className="text-muted-foreground">Remove <strong>{blacklistDialog.name}</strong> from the blacklist? They will be able to request visits again.</p>

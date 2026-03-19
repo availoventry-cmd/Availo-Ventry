@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
 import { usersTable, rolesTable, rolePermissionsTable } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { ALL_PERMISSIONS, type Permission } from "@workspace/db";
 
 export interface AuthUser {
@@ -34,9 +34,19 @@ declare global {
 const SYSTEM_ROLES = ["super_admin", "org_admin"];
 const ALL_PERMISSION_KEYS = Object.keys(ALL_PERMISSIONS) as Permission[];
 
+export async function resolveRoleId(role: string, orgId: string | null): Promise<string | null> {
+  if (!orgId) return null;
+  const match = await db
+    .select({ id: rolesTable.id })
+    .from(rolesTable)
+    .where(and(eq(rolesTable.orgId, orgId), eq(rolesTable.slug, role)))
+    .limit(1);
+  return match[0]?.id ?? null;
+}
+
 export async function loadPermissions(role: string, roleId: string | null): Promise<string[]> {
   if (SYSTEM_ROLES.includes(role)) {
-    return ALL_PERMISSION_KEYS;
+    return [...ALL_PERMISSION_KEYS];
   }
   if (!roleId) {
     return [];
@@ -61,7 +71,16 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  const permissions = await loadPermissions(user[0].role, user[0].roleId ?? null);
+  let roleId = user[0].roleId ?? null;
+
+  if (!roleId && !SYSTEM_ROLES.includes(user[0].role) && user[0].orgId) {
+    roleId = await resolveRoleId(user[0].role, user[0].orgId);
+    if (roleId) {
+      await db.update(usersTable).set({ roleId }).where(eq(usersTable.id, user[0].id));
+    }
+  }
+
+  const permissions = await loadPermissions(user[0].role, roleId);
 
   req.user = {
     id: user[0].id,
@@ -69,7 +88,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     name: user[0].name,
     nameAr: user[0].nameAr,
     role: user[0].role,
-    roleId: user[0].roleId ?? null,
+    roleId,
     orgId: user[0].orgId,
     branchId: user[0].branchId,
     department: user[0].department,

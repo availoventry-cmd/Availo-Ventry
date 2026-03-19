@@ -123,12 +123,13 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 
 **DB Tables**: `roles`, `role_permissions` (in `lib/db/src/schema/`). `users.roleId` and `invitations.roleId` added.
 
-**Permissions** (`lib/db/src/permissions.ts`): 24 permissions across visit_requests, visitors, blacklist, users, branches, settings, reports, audit_logs, dashboard, roles, notifications. `ALL_PERMISSIONS` constant and `DEFAULT_ROLE_PERMISSIONS` per base role.
+**Permissions** (`lib/db/src/permissions.ts`): 25 permissions across visit_requests, visitors, blacklist, users, branches, settings, reports, audit_logs, dashboard, roles, notifications, invitations, telegram, public_booking. `ALL_PERMISSIONS` constant and `DEFAULT_ROLE_PERMISSIONS` per base role.
 
 **Backend** (`artifacts/api-server/src/lib/auth.ts`):
 - `loadPermissions(role, roleId)` — returns ALL permissions for super_admin/org_admin; loads from DB for others
+- `resolveRoleId(role, orgId)` — auto-assigns roleId to users missing one (matches by role slug + org)
 - `requirePermission(...perms)` middleware — checks user permissions on every protected route
-- `requireAuth` now attaches `permissions[]` to `req.user`
+- `requireAuth` now attaches `permissions[]` to `req.user`; auto-resolves and persists `roleId` for users without one
 - All auth responses include `permissions[]` array
 
 **API Route**: `GET|POST|PUT|DELETE /api/organizations/:orgId/roles` — full CRUD for custom roles

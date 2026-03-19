@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, branchesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId } from "../lib/id.js";
 
 const router = Router({ mergeParams: true });
@@ -20,7 +20,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // POST /api/organizations/:orgId/branches
-router.post("/", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.post("/", requireAuth, requireOrgAccess, requirePermission("branches.manage"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { name, nameAr, address, city, branchCode, entryMode = "staffed", maxConcurrentVisitors } = req.body;
@@ -69,7 +69,7 @@ router.get("/:branchId", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // PUT /api/organizations/:orgId/branches/:branchId
-router.put("/:branchId", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.put("/:branchId", requireAuth, requireOrgAccess, requirePermission("branches.manage"), async (req, res) => {
   try {
     const { orgId, branchId } = req.params;
     const { name, nameAr, address, city, entryMode, verificationPolicyOverride, maxConcurrentVisitors, isActive } = req.body;
@@ -96,7 +96,7 @@ router.put("/:branchId", requireAuth, requireOrgAccess, requireRole("org_admin",
 });
 
 // DELETE /api/organizations/:orgId/branches/:branchId
-router.delete("/:branchId", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.delete("/:branchId", requireAuth, requireOrgAccess, requirePermission("branches.manage"), async (req, res) => {
   try {
     const { orgId, branchId } = req.params;
     await db.update(branchesTable)

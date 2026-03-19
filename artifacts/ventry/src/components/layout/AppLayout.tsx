@@ -25,11 +25,12 @@ import {
   ShieldAlert,
   UserSquare2,
   ScanLine,
-  Send
+  Send,
+  ShieldCheck
 } from "lucide-react";
 
 export function AppLayout({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission, hasAnyPermission } = useAuth();
   const [location] = useLocation();
 
   if (!user) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
@@ -47,28 +48,38 @@ export function AppLayout({ children }: { children: ReactNode }) {
           { title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard },
           { title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck },
           { title: "Visitors", url: "/portal/visitors", icon: Users },
+          { title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck },
           { title: "Settings", url: "/portal/settings", icon: Settings },
           { title: "Telegram Bot", url: "/settings/telegram", icon: Send },
         ];
       case "visitor_manager":
-        return [
-          { title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard },
-          { title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck },
-          { title: "Visitors", url: "/portal/visitors", icon: Users },
-          { title: "Telegram Bot", url: "/settings/telegram", icon: Send },
-        ];
       case "receptionist":
-        return [
-          { title: "Desk Console", url: "/receptionist", icon: ScanLine },
-          { title: "Expected Today", url: "/portal/visit-requests", icon: CalendarCheck },
-        ];
       case "host_employee":
-        return [
-          { title: "My Visitors", url: "/host", icon: UserSquare2 },
-          { title: "New Request", url: "/host/new", icon: CalendarCheck },
-        ];
-      default:
-        return [];
+      default: {
+        const items = [];
+        if (user.role === "receptionist") {
+          items.push({ title: "Desk Console", url: "/receptionist", icon: ScanLine });
+        }
+        if (user.role === "host_employee") {
+          items.push({ title: "My Visitors", url: "/host", icon: UserSquare2 });
+          items.push({ title: "New Request", url: "/host/new", icon: CalendarCheck });
+        }
+        if (user.role === "visitor_manager") {
+          items.push({ title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard });
+        }
+        if (hasAnyPermission("visit_requests.view", "visit_requests.manage", "visit_requests.create", "visit_requests.checkin")) {
+          if (user.role !== "host_employee") {
+            items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
+          }
+        }
+        if (hasPermission("visitors.view")) {
+          items.push({ title: "Visitors", url: "/portal/visitors", icon: Users });
+        }
+        if (hasPermission("roles.view")) {
+          items.push({ title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck });
+        }
+        return items;
+      }
     }
   };
 

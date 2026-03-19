@@ -1,14 +1,14 @@
 import { Router } from "express";
 import { db, invitationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId, generateToken } from "../lib/id.js";
 import { addDays } from "../lib/dateUtils.js";
 
 const router = Router({ mergeParams: true });
 
 // GET /api/organizations/:orgId/invitations
-router.get("/", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.get("/", requireAuth, requireOrgAccess, requirePermission("invitations.manage"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { status } = req.query;
@@ -35,7 +35,7 @@ router.get("/", requireAuth, requireOrgAccess, requireRole("org_admin", "super_a
 });
 
 // POST /api/organizations/:orgId/invitations
-router.post("/", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.post("/", requireAuth, requireOrgAccess, requirePermission("invitations.manage"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { name, nameAr, email, phone, role, branchId, department, jobTitle } = req.body;
@@ -74,7 +74,7 @@ router.post("/", requireAuth, requireOrgAccess, requireRole("org_admin", "super_
 });
 
 // POST /api/organizations/:orgId/invitations/:invitationId/resend
-router.post("/:invitationId/resend", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.post("/:invitationId/resend", requireAuth, requireOrgAccess, requirePermission("invitations.manage"), async (req, res) => {
   try {
     const { invitationId } = req.params;
     const invitations = await db.select().from(invitationsTable).where(eq(invitationsTable.id, invitationId)).limit(1);
@@ -105,7 +105,7 @@ router.post("/:invitationId/resend", requireAuth, requireOrgAccess, requireRole(
 });
 
 // PATCH /api/organizations/:orgId/invitations/:invitationId/revoke
-router.patch("/:invitationId/revoke", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.patch("/:invitationId/revoke", requireAuth, requireOrgAccess, requirePermission("invitations.manage"), async (req, res) => {
   try {
     const { invitationId } = req.params;
     await db.update(invitationsTable).set({

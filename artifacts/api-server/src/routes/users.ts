@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, usersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 
 const router = Router({ mergeParams: true });
 
@@ -78,7 +78,7 @@ router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // PUT /api/organizations/:orgId/users/:userId
-router.put("/:userId", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.put("/:userId", requireAuth, requireOrgAccess, requirePermission("users.manage"), async (req, res) => {
   try {
     const { orgId, userId } = req.params;
     const { name, nameAr, phone, role, branchId, department, jobTitle } = req.body;
@@ -110,7 +110,7 @@ router.put("/:userId", requireAuth, requireOrgAccess, requireRole("org_admin", "
 });
 
 // PATCH /api/organizations/:orgId/users/:userId/deactivate
-router.patch("/:userId/deactivate", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.patch("/:userId/deactivate", requireAuth, requireOrgAccess, requirePermission("users.manage"), async (req, res) => {
   try {
     const { orgId, userId } = req.params;
     await db.update(usersTable)
@@ -123,7 +123,7 @@ router.patch("/:userId/deactivate", requireAuth, requireOrgAccess, requireRole("
 });
 
 // PATCH /api/organizations/:orgId/users/:userId/reactivate
-router.patch("/:userId/reactivate", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.patch("/:userId/reactivate", requireAuth, requireOrgAccess, requirePermission("users.manage"), async (req, res) => {
   try {
     const { orgId, userId } = req.params;
     await db.update(usersTable)
@@ -136,7 +136,7 @@ router.patch("/:userId/reactivate", requireAuth, requireOrgAccess, requireRole("
 });
 
 // POST /api/organizations/:orgId/users/:userId/reset-password
-router.post("/:userId/reset-password", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.post("/:userId/reset-password", requireAuth, requireOrgAccess, requirePermission("users.manage"), async (req, res) => {
   try {
     await db.update(usersTable)
       .set({ mustChangePassword: true })

@@ -26,6 +26,7 @@ export const invitationsTable = pgTable("invitations", {
   resendCount: integer("resend_count").notNull().default(0),
   lastResentAt: timestamp("last_resent_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  roleId: text("role_id"),
 });
 
 export const insertInvitationSchema = createInsertSchema(invitationsTable).omit({

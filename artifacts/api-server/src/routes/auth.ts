@@ -1,11 +1,33 @@
 import { Router } from "express";
 import { db, usersTable, invitationsTable, organizationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, loadPermissions } from "../lib/auth.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
 import { generateId } from "../lib/id.js";
 
 const router = Router();
+
+async function buildUserResponse(user: typeof usersTable.$inferSelect, orgInfo: typeof organizationsTable.$inferSelect | null) {
+  const setupWizardCompleted = user.role === "super_admin" ? true : (orgInfo?.setupWizardCompleted ?? true);
+  const permissions = await loadPermissions(user.role, user.roleId ?? null);
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    nameAr: user.nameAr,
+    role: user.role,
+    roleId: user.roleId ?? null,
+    orgId: user.orgId,
+    branchId: user.branchId,
+    department: user.department,
+    jobTitle: user.jobTitle,
+    mustChangePassword: user.mustChangePassword,
+    setupWizardCompleted,
+    organizationName: orgInfo?.name || null,
+    organizationStatus: orgInfo?.status || null,
+    permissions,
+  };
+}
 
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
@@ -34,42 +56,19 @@ router.post("/login", async (req, res) => {
       return;
     }
 
-    // Update last login
     await db.update(usersTable)
       .set({ lastLoginAt: new Date(), lastActiveAt: new Date(), loginCount: (user.loginCount || 0) + 1 })
       .where(eq(usersTable.id, user.id));
 
-    // Set session
     (req as unknown as { session: { userId: string; save: (cb: (err: unknown) => void) => void } }).session.userId = user.id;
 
-    // Get org info
     let orgInfo = null;
-    let setupWizardCompleted = true;
     if (user.orgId) {
       const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
-      if (orgs[0]) {
-        orgInfo = orgs[0];
-        setupWizardCompleted = orgs[0].setupWizardCompleted;
-      }
+      if (orgs[0]) orgInfo = orgs[0];
     }
 
-    const responseUser = {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      nameAr: user.nameAr,
-      role: user.role,
-      orgId: user.orgId,
-      branchId: user.branchId,
-      department: user.department,
-      jobTitle: user.jobTitle,
-      mustChangePassword: user.mustChangePassword,
-      setupWizardCompleted: user.role === "super_admin" ? true : setupWizardCompleted,
-      organizationName: orgInfo?.name || null,
-      organizationStatus: orgInfo?.status || null,
-    };
-
-    res.json({ user: responseUser });
+    res.json({ user: await buildUserResponse(user, orgInfo) });
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ error: "Internal Server Error" });
@@ -91,32 +90,19 @@ router.post("/logout", (req, res) => {
 // GET /api/auth/me
 router.get("/me", requireAuth, async (req, res) => {
   try {
-    const user = req.user!;
+    const userId = req.user!.id;
+    const users = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!users[0]) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    const user = users[0];
     let orgInfo = null;
-    let setupWizardCompleted = true;
     if (user.orgId) {
       const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
-      if (orgs[0]) {
-        orgInfo = orgs[0];
-        setupWizardCompleted = orgs[0].setupWizardCompleted;
-      }
+      if (orgs[0]) orgInfo = orgs[0];
     }
-
-    res.json({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      nameAr: user.nameAr,
-      role: user.role,
-      orgId: user.orgId,
-      branchId: user.branchId,
-      department: user.department,
-      jobTitle: user.jobTitle,
-      mustChangePassword: user.mustChangePassword,
-      setupWizardCompleted: user.role === "super_admin" ? true : setupWizardCompleted,
-      organizationName: orgInfo?.name || null,
-      organizationStatus: orgInfo?.status || null,
-    });
+    res.json(await buildUserResponse(user, orgInfo));
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error" });
   }
@@ -162,6 +148,7 @@ router.get("/verify-invitation-token", async (req, res) => {
       email: inv.email,
       name: inv.name,
       role: inv.role,
+      roleId: inv.roleId ?? null,
       orgName: row.org?.name || "",
       expiresAt: inv.tokenExpiresAt,
     });
@@ -216,6 +203,7 @@ router.post("/accept-invitation", async (req, res) => {
       email: inv.email,
       phone: inv.phone,
       role: inv.role as "org_admin" | "visitor_manager" | "receptionist" | "host_employee",
+      roleId: inv.roleId ?? null,
       department: inv.department,
       jobTitle: inv.jobTitle,
       passwordHash,
@@ -234,7 +222,7 @@ router.post("/accept-invitation", async (req, res) => {
     (req as unknown as { session: { userId: string } }).session.userId = userId;
 
     const orgInfo = row.org;
-    const setupWizardCompleted = orgInfo?.setupWizardCompleted ?? true;
+    const permissions = await loadPermissions(inv.role, inv.roleId ?? null);
 
     res.json({
       user: {
@@ -243,12 +231,14 @@ router.post("/accept-invitation", async (req, res) => {
         name: inv.name,
         nameAr: inv.nameAr,
         role: inv.role,
+        roleId: inv.roleId ?? null,
         orgId: inv.orgId,
         branchId: inv.branchId,
         mustChangePassword: false,
-        setupWizardCompleted: inv.role === "org_admin" ? false : setupWizardCompleted,
+        setupWizardCompleted: inv.role === "org_admin" ? false : (orgInfo?.setupWizardCompleted ?? true),
         organizationName: orgInfo?.name || null,
         organizationStatus: orgInfo?.status || null,
+        permissions,
       },
     });
   } catch (err) {

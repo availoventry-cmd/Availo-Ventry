@@ -1,11 +1,34 @@
 import { Router } from "express";
-import { db, organizationsTable, usersTable, branchesTable, visitRequestsTable } from "@workspace/db";
+import { db, organizationsTable, usersTable, branchesTable, visitRequestsTable, rolesTable, rolePermissionsTable } from "@workspace/db";
 import { eq, ilike, and, count, sql } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { generateId, generateToken } from "../lib/id.js";
 import { hashPassword } from "../lib/password.js";
 import { addDays } from "../lib/dateUtils.js";
 import { invitationsTable } from "@workspace/db";
+import { DEFAULT_ROLE_PERMISSIONS } from "@workspace/db";
+
+const DEFAULT_ROLES = [
+  { slug: "visitor_manager", name: "Visitor Manager" },
+  { slug: "receptionist", name: "Receptionist" },
+  { slug: "host_employee", name: "Host Employee" },
+];
+
+async function createDefaultRolesForOrg(orgId: string) {
+  for (const r of DEFAULT_ROLES) {
+    const roleId = generateId();
+    await db.insert(rolesTable).values({
+      id: roleId, orgId, name: r.name, slug: r.slug,
+      isSystem: false, isDefault: true, isActive: true,
+    }).onConflictDoNothing();
+    const perms = DEFAULT_ROLE_PERMISSIONS[r.slug] ?? [];
+    if (perms.length > 0) {
+      await db.insert(rolePermissionsTable).values(
+        perms.map(p => ({ id: generateId(), roleId, permission: p as string }))
+      ).onConflictDoNothing();
+    }
+  }
+}
 
 const router = Router();
 
@@ -81,6 +104,9 @@ router.post("/", requireAuth, requireRole("super_admin"), async (req, res) => {
       setupWizardCompleted: false,
       createdById: req.user!.id,
     });
+
+    // Auto-create default roles for this org
+    await createDefaultRolesForOrg(orgId);
 
     // Create invitation for first org admin
     const inviteToken = generateToken();

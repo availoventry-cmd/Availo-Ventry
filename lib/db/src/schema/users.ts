@@ -37,6 +37,7 @@ export const usersTable = pgTable("users", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   deactivatedAt: timestamp("deactivated_at"),
   deactivatedById: text("deactivated_by_id"),
+  roleId: text("role_id"),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({

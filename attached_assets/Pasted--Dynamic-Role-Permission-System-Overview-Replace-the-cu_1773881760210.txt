@@ -1,0 +1,291 @@
+# Dynamic Role & Permission System
+
+## Overview
+Replace the current hardcoded role system with a dynamic, permission-based role system. Currently roles are a PostgreSQL enum (`user_role`) with fixed values: `super_admin`, `org_admin`, `visitor_manager`, `receptionist`, `host_employee`. We need to make roles dynamic per organization while keeping `super_admin` and `org_admin` as fixed system roles.
+
+## IMPORTANT CONSTRAINTS
+- Do NOT delete or recreate existing tables. Use ALTER TABLE and new tables only.
+- Do NOT break existing login, session, or auth flows.
+- Keep the `role` column on `users` table for backward compatibility but add a new `role_id` column that references the new roles table.
+- Migrate incrementally — existing users should keep working.
+
+## Database Changes
+
+### 1. Create `roles` table in `lib/db/src/schema/` as a new file `roles.ts`
+```
+roles table:
+  id: text, primary key
+  org_id: text, nullable (null = system role like super_admin/org_admin)
+  name: text, not null (e.g. "Visitor Manager", "Receptionist", "Custom Security")
+  slug: text, not null (e.g. "visitor_manager", "receptionist", "custom_security")
+  description: text, nullable
+  is_system: boolean, default false (true for super_admin, org_admin)
+  is_default: boolean, default false (true for visitor_manager, receptionist, host_employee — these get auto-created per org)
+  is_active: boolean, default true
+  created_at: timestamp, default now
+  updated_at: timestamp, default now
+```
+Add unique constraint on (org_id, slug) so each org can't have duplicate role slugs.
+
+### 2. Create `role_permissions` table in `lib/db/src/schema/` as a new file `rolePermissions.ts`
+```
+role_permissions table:
+  id: text, primary key
+  role_id: text, not null (references roles.id)
+  permission: text, not null (e.g. "visit_requests.view", "visit_requests.approve", "visitors.manage")
+  created_at: timestamp, default now
+```
+Add unique constraint on (role_id, permission).
+
+### 3. Define the full permission list as a constant in a new file `lib/db/src/permissions.ts`:
+```typescript
+export const ALL_PERMISSIONS = {
+  // Dashboard
+  "dashboard.view": "View dashboard and statistics",
+  
+  // Visit Requests
+  "visit_requests.view": "View visit requests",
+  "visit_requests.create": "Create new visit requests",
+  "visit_requests.approve": "Approve or reject visit requests",
+  "visit_requests.check_in": "Check in visitors",
+  "visit_requests.check_out": "Check out visitors",
+  
+  // Visitors
+  "visitors.view": "View visitor records",
+  "visitors.manage": "Add and edit visitor records",
+  
+  // Blacklist
+  "blacklist.view": "View blacklist",
+  "blacklist.manage": "Add/remove from blacklist",
+  
+  // Users (within org)
+  "users.view": "View team members",
+  "users.manage": "Invite and manage team members",
+  
+  // Branches
+  "branches.view": "View branches",
+  "branches.manage": "Create and edit branches",
+  
+  // Reports
+  "reports.view": "View reports and analytics",
+  
+  // Audit Logs
+  "audit_logs.view": "View audit logs",
+  
+  // Notifications
+  "notifications.view": "View notifications",
+  "notifications.manage": "Manage notification settings",
+  
+  // Settings
+  "settings.view": "View organization settings",
+  "settings.manage": "Edit organization settings",
+  
+  // Roles
+  "roles.view": "View roles",
+  "roles.manage": "Create, edit, and delete custom roles",
+  
+  // Telegram
+  "telegram.manage": "Manage Telegram bot settings",
+  
+  // Public Booking
+  "public_booking.manage": "Manage public booking page settings",
+} as const;
+
+export type Permission = keyof typeof ALL_PERMISSIONS;
+
+// Default permissions for each default role
+export const DEFAULT_ROLE_PERMISSIONS: Record<string, Permission[]> = {
+  visitor_manager: [
+    "dashboard.view",
+    "visit_requests.view", "visit_requests.create", "visit_requests.approve",
+    "visitors.view", "visitors.manage",
+    "blacklist.view", "blacklist.manage",
+    "reports.view",
+    "audit_logs.view",
+    "notifications.view", "notifications.manage",
+    "telegram.manage",
+  ],
+  receptionist: [
+    "dashboard.view",
+    "visit_requests.view", "visit_requests.check_in", "visit_requests.check_out",
+    "visitors.view",
+    "blacklist.view",
+    "notifications.view",
+  ],
+  host_employee: [
+    "dashboard.view",
+    "visit_requests.view", "visit_requests.create",
+    "visitors.view",
+    "notifications.view",
+  ],
+};
+```
+
+### 4. Update `users` table schema
+Add a new nullable column `role_id` (text, references roles.id). Keep the existing `role` column for now. The app should read `role_id` to get permissions but fall back to `role` for system roles (super_admin, org_admin).
+
+### 5. Export new schemas from `lib/db/src/schema/index.ts`
+Add exports for roles, rolePermissions tables.
+
+## Seed / Migration Script
+
+Create a script in `scripts/src/seed-roles.ts` that:
+1. Creates system roles (org_id = null, is_system = true):
+   - super_admin (all permissions)
+   - org_admin (all permissions)
+2. For each existing organization, creates 3 default roles (is_default = true) with their default permissions:
+   - Visitor Manager
+   - Receptionist  
+   - Host Employee
+3. For each existing user, sets `role_id` based on their current `role` value, matching to the correct org-specific role.
+
+Register this script in `scripts/package.json`.
+
+## Backend Changes
+
+### Update `lib/auth.ts` middleware
+
+1. Update `AuthUser` interface to include `roleId`, `permissions` (string array), and keep `role` for backward compat.
+2. In `requireAuth`, after loading user, also load their role and permissions:
+   - If user.role is "super_admin" or "org_admin", grant ALL permissions.
+   - Otherwise, look up role_id → role_permissions to get the user's permission list.
+   - Attach permissions array to `req.user`.
+3. Create a new middleware `requirePermission(...permissions: string[])` that checks if `req.user.permissions` includes ANY of the listed permissions. This replaces `requireRole` in routes.
+4. Keep `requireRole` working for backward compatibility but make all routes gradually use `requirePermission`.
+
+### Update route authorization
+
+Replace `requireRole` calls with `requirePermission` in all route files:
+- `routes/visitRequests.ts`: GET requires "visit_requests.view", POST requires "visit_requests.create", approve/reject requires "visit_requests.approve", check-in requires "visit_requests.check_in", check-out requires "visit_requests.check_out"
+- `routes/visitors.ts`: GET requires "visitors.view", POST/PUT requires "visitors.manage"
+- `routes/blacklist.ts`: GET requires "blacklist.view", POST/DELETE requires "blacklist.manage"
+- `routes/users.ts`: GET requires "users.view", PUT/PATCH requires "users.manage"
+- `routes/branches.ts`: GET requires "branches.view", POST/PUT requires "branches.manage"
+- `routes/reports.ts`: requires "reports.view"
+- `routes/auditLogs.ts`: requires "audit_logs.view"
+- `routes/dashboard.ts`: requires "dashboard.view"
+- `routes/notifications.ts`: GET requires "notifications.view"
+- `routes/organizations.ts`: keep super_admin only (use requireRole for this)
+
+### New API routes: `routes/roles.ts`
+
+Create a new route file for role management, mounted at `/api/organizations/:orgId/roles`:
+
+```
+GET    /                        - List all roles for the org (include permission count). Requires "roles.view" or org_admin.
+GET    /:roleId                 - Get role with its permissions. Requires "roles.view" or org_admin.
+POST   /                        - Create custom role (name, slug, description, permissions[]). Requires "roles.manage" or org_admin. Cannot create system roles.
+PUT    /:roleId                 - Update role name, description, permissions[]. Requires "roles.manage" or org_admin. Cannot edit system roles (super_admin, org_admin). CAN edit default roles' permissions.
+DELETE /:roleId                 - Delete custom role (not system or default). Requires "roles.manage" or org_admin. Must reassign users first or reject if users exist.
+GET    /permissions/all         - Return the full ALL_PERMISSIONS list for the UI to render checkboxes.
+```
+
+Register this router in `routes/index.ts`.
+
+### Update auth routes
+
+In `routes/auth.ts` — login and /me responses, include the user's permissions array and roleId so the frontend knows what to show/hide.
+
+### Update invitation flow
+
+In `routes/invitations.ts` and `routes/auth.ts` (accept-invitation), when creating a user from an invitation:
+- The invitation should reference a `role_id` instead of (or in addition to) the role string.
+- When accepting an invitation, set the user's `role_id`.
+
+## Frontend Changes
+
+### Update `useAuth` hook
+The auth response now includes `permissions: string[]`. Store this in the auth context. Add a helper `hasPermission(permission: string): boolean` and `hasAnyPermission(...permissions: string[]): boolean`.
+
+### Update `AppLayout.tsx` sidebar navigation
+Replace the hardcoded role-based switch statement with permission-based logic:
+- "Dashboard" shows if user has "dashboard.view"
+- "Visit Requests" shows if user has "visit_requests.view"
+- "Visitors" shows if user has "visitors.view"
+- "Settings" shows if user has "settings.view" or "settings.manage" or role is "org_admin"
+- "Telegram Bot" shows if user has "telegram.manage"
+- Super admin items still show only for super_admin role
+- Add "Roles" nav item for org_admin (links to new roles management page)
+
+### Update `App.tsx` routing
+Replace `allowedRoles` in ProtectedRoute with permission checks. Add a new `requiredPermission` prop:
+```tsx
+<ProtectedRoute component={VisitRequests} requiredPermission="visit_requests.view" />
+```
+Keep `allowedRoles` for super_admin routes.
+
+### New page: `pages/portal/roles.tsx` — Role Management
+
+Build a role management page accessible to org_admin:
+
+1. **Roles List View**: Table showing all roles for the org with columns: Name, Description, Type (System/Default/Custom), Users Count, Actions (Edit/Delete). System roles (super_admin, org_admin) show as read-only with a badge. Default roles show an "Edit Permissions" button. Custom roles show "Edit" and "Delete" buttons.
+
+2. **Create/Edit Role Dialog**: A dialog/sheet with:
+   - Role name input
+   - Description input (optional)
+   - Permissions grid: Group permissions by category (Dashboard, Visit Requests, Visitors, Blacklist, Users, Branches, Reports, Audit Logs, Notifications, Settings, Roles, Telegram). Each permission is a checkbox with its description label. For default roles, all checkboxes are editable.
+
+3. **Delete Role**: Confirmation dialog. If users are assigned to this role, show a warning with user count and require reassignment to another role before deletion.
+
+Add route for this page in `App.tsx`: `/portal/roles` with `allowedRoles={['org_admin']}`.
+Add "Roles & Permissions" to the org_admin nav items in AppLayout.
+
+### Update existing pages
+All places that currently check `user.role === "something"` to show/hide buttons should use `hasPermission()` instead. Key files:
+- `pages/portal/visit-requests.tsx` — approve/reject buttons need "visit_requests.approve", check-in needs "visit_requests.check_in"
+- `pages/receptionist/dashboard.tsx` — check-in/out actions
+- `pages/portal/visitors.tsx` — manage actions need "visitors.manage"
+- `pages/portal/settings.tsx` — settings need "settings.manage"
+
+## Auto-Create Default Roles on Org Creation
+
+In `routes/organizations.ts`, when a new organization is created (POST), automatically create the 3 default roles (Visitor Manager, Receptionist, Host Employee) with their default permissions for that org.
+
+## Summary of Files to Create/Modify
+
+**Create:**
+- `lib/db/src/schema/roles.ts`
+- `lib/db/src/schema/rolePermissions.ts`
+- `lib/db/src/permissions.ts`
+- `artifacts/api-server/src/routes/roles.ts`
+- `artifacts/ventry/src/pages/portal/roles.tsx`
+- `scripts/src/seed-roles.ts`
+
+**Modify:**
+- `lib/db/src/schema/index.ts` — add new exports
+- `lib/db/src/schema/users.ts` — add role_id column
+- `artifacts/api-server/src/lib/auth.ts` — add permission loading and requirePermission middleware
+- `artifacts/api-server/src/routes/index.ts` — register roles router
+- `artifacts/api-server/src/routes/auth.ts` — include permissions in login/me response
+- `artifacts/api-server/src/routes/organizations.ts` — auto-create default roles on org creation
+- `artifacts/api-server/src/routes/invitations.ts` — support role_id
+- `artifacts/api-server/src/routes/visitRequests.ts` — use requirePermission
+- `artifacts/api-server/src/routes/visitors.ts` — use requirePermission
+- `artifacts/api-server/src/routes/blacklist.ts` — use requirePermission
+- `artifacts/api-server/src/routes/users.ts` — use requirePermission
+- `artifacts/api-server/src/routes/branches.ts` — use requirePermission
+- `artifacts/api-server/src/routes/reports.ts` — use requirePermission
+- `artifacts/api-server/src/routes/auditLogs.ts` — use requirePermission
+- `artifacts/api-server/src/routes/dashboard.ts` — use requirePermission
+- `artifacts/api-server/src/routes/notifications.ts` — use requirePermission
+- `artifacts/ventry/src/hooks/use-auth.tsx` — add permissions and hasPermission helper
+- `artifacts/ventry/src/components/layout/AppLayout.tsx` — permission-based nav
+- `artifacts/ventry/src/App.tsx` — permission-based route protection
+- `artifacts/ventry/src/pages/portal/visit-requests.tsx` — permission-based UI
+- `artifacts/ventry/src/pages/portal/visitors.tsx` — permission-based UI
+- `artifacts/ventry/src/pages/portal/settings.tsx` — permission-based UI
+- `artifacts/ventry/src/pages/receptionist/dashboard.tsx` — permission-based UI
+- `scripts/package.json` — add seed-roles script
+
+## Execution Order
+1. Create DB schema files and permissions constants
+2. Run `pnpm --filter @workspace/db run push` to apply schema
+3. Create and run seed-roles script
+4. Update auth middleware
+5. Create roles API routes
+6. Update all existing routes to use requirePermission
+7. Update frontend auth hook
+8. Update frontend layout and routing
+9. Build the roles management page
+10. Update existing pages for permission checks
+11. Test login with all demo users to verify nothing is broken

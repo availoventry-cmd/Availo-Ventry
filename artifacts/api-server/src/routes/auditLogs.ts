@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { db, auditLogsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 
 const router = Router({ mergeParams: true });
 
 // GET /api/organizations/:orgId/audit-logs
-router.get("/", requireAuth, requireOrgAccess, requireRole("org_admin", "super_admin"), async (req, res) => {
+router.get("/", requireAuth, requireOrgAccess, requirePermission("audit_logs.view"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { userId, action, entityType, dateFrom, dateTo, page = "1", limit = "50" } = req.query;

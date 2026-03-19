@@ -117,6 +117,29 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 - **Real-time notifications** (in-app)
 - **Bilingual support**: Arabic RTL / English LTR (planned)
 - Session-cookie auth using `express-session`; passwords hashed with SHA-256 + random salt
+- **Dynamic Role & Permission System**: database-driven granular permissions replacing hardcoded role checks
+
+### Dynamic Role & Permission System
+
+**DB Tables**: `roles`, `role_permissions` (in `lib/db/src/schema/`). `users.roleId` and `invitations.roleId` added.
+
+**Permissions** (`lib/db/src/permissions.ts`): 24 permissions across visit_requests, visitors, blacklist, users, branches, settings, reports, audit_logs, dashboard, roles, notifications. `ALL_PERMISSIONS` constant and `DEFAULT_ROLE_PERMISSIONS` per base role.
+
+**Backend** (`artifacts/api-server/src/lib/auth.ts`):
+- `loadPermissions(role, roleId)` — returns ALL permissions for super_admin/org_admin; loads from DB for others
+- `requirePermission(...perms)` middleware — checks user permissions on every protected route
+- `requireAuth` now attaches `permissions[]` to `req.user`
+- All auth responses include `permissions[]` array
+
+**API Route**: `GET|POST|PUT|DELETE /api/organizations/:orgId/roles` — full CRUD for custom roles
+
+**Seeding**: `pnpm --filter @workspace/scripts run seed-roles` — creates default roles (visitor_manager, receptionist, host_employee) for all existing orgs. New orgs auto-get default roles on creation.
+
+**Frontend** (`artifacts/ventry/src/`):
+- `useAuth()` hook exposes `hasPermission(perm)` and `hasAnyPermission(...perms)` helpers
+- `AppLayout` nav is permission-aware for non-admin roles
+- `ProtectedRoute` supports `requiredPermission` prop
+- `/portal/roles` — Roles & Permissions management page (create/edit/delete custom roles, assign permissions)
 
 ### Demo Credentials (seeded)
 | Role | Email | Password |
@@ -136,6 +159,7 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 - `/organizations/:orgId/visitors` — visitor records
 - `/organizations/:orgId/visit-requests` — visit request CRUD, approve/reject, check-in/out
 - `/organizations/:orgId/blacklist` — blacklist management
+- `/organizations/:orgId/roles` — role & permission management (CRUD, permission assignment)
 - `/organizations/:orgId/audit-logs` — audit trail
 - `/organizations/:orgId/reports` — visitor traffic reports
 - `/dashboard/super-admin` — platform dashboard

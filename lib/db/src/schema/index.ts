@@ -9,3 +9,5 @@ export * from "./auditLogs";
 export * from "./notifications";
 export * from "./otpSessions";
 export * from "./telegramSubscriptions";
+export * from "./roles";
+export * from "./rolePermissions";

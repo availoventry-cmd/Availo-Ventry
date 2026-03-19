@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { db, blacklistTable, visitorsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId } from "../lib/id.js";
 
 const router = Router({ mergeParams: true });
 
 // GET /api/organizations/:orgId/blacklist
-router.get("/", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.get("/", requireAuth, requireOrgAccess, requirePermission("blacklist.view"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { search, page = "1", limit = "20" } = req.query;
@@ -43,7 +43,7 @@ router.get("/", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor
 });
 
 // POST /api/organizations/:orgId/blacklist
-router.post("/", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.post("/", requireAuth, requireOrgAccess, requirePermission("blacklist.manage"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { visitorId, reason, expiresAt } = req.body;
@@ -79,7 +79,7 @@ router.post("/", requireAuth, requireOrgAccess, requireRole("org_admin", "visito
 });
 
 // DELETE /api/organizations/:orgId/blacklist/:blacklistId
-router.delete("/:blacklistId", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.delete("/:blacklistId", requireAuth, requireOrgAccess, requirePermission("blacklist.manage"), async (req, res) => {
   try {
     const { orgId, blacklistId } = req.params;
 

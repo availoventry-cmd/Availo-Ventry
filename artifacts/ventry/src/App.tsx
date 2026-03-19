@@ -21,12 +21,13 @@ import PortalVisitors from "@/pages/portal/visitors";
 import PortalSettings from "@/pages/portal/settings";
 import HostDashboard from "@/pages/host/index";
 import HostNewRequest from "@/pages/host/new";
+import PortalRoles from "@/pages/portal/roles";
 
 const queryClient = new QueryClient();
 
 // Protected Route Wrapper
-function ProtectedRoute({ component: Component, allowedRoles }: { component: any, allowedRoles?: string[] }) {
-  const { user, isLoading, isFetching } = useAuth();
+function ProtectedRoute({ component: Component, allowedRoles, requiredPermission }: { component: any, allowedRoles?: string[], requiredPermission?: string }) {
+  const { user, isLoading, isFetching, hasPermission } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -42,6 +43,9 @@ function ProtectedRoute({ component: Component, allowedRoles }: { component: any
   if (!user) return null;
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     return <div className="p-8 text-center text-red-600">Access Denied</div>;
+  }
+  if (requiredPermission && !hasPermission(requiredPermission)) {
+    return <div className="p-8 text-center text-red-600">You do not have permission to view this page.</div>;
   }
 
   return (
@@ -99,6 +103,9 @@ function Router() {
       </Route>
       <Route path="/portal/settings">
         {() => <ProtectedRoute component={PortalSettings} allowedRoles={['org_admin']} />}
+      </Route>
+      <Route path="/portal/roles">
+        {() => <ProtectedRoute component={PortalRoles} requiredPermission="roles.view" />}
       </Route>
 
       {/* Host Employee Routes */}

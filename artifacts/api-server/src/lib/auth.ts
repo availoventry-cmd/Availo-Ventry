@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
-import { usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { usersTable, rolesTable, rolePermissionsTable } from "@workspace/db";
+import { eq, inArray } from "drizzle-orm";
+import { ALL_PERMISSIONS, type Permission } from "@workspace/db";
 
 export interface AuthUser {
   id: string;
@@ -9,11 +10,13 @@ export interface AuthUser {
   name: string;
   nameAr: string | null;
   role: string;
+  roleId: string | null;
   orgId: string | null;
   branchId: string | null;
   department: string | null;
   jobTitle: string | null;
   mustChangePassword: boolean;
+  permissions: string[];
 }
 
 declare global {
@@ -26,6 +29,23 @@ declare global {
       };
     }
   }
+}
+
+const SYSTEM_ROLES = ["super_admin", "org_admin"];
+const ALL_PERMISSION_KEYS = Object.keys(ALL_PERMISSIONS) as Permission[];
+
+export async function loadPermissions(role: string, roleId: string | null): Promise<string[]> {
+  if (SYSTEM_ROLES.includes(role)) {
+    return ALL_PERMISSION_KEYS;
+  }
+  if (!roleId) {
+    return [];
+  }
+  const perms = await db
+    .select({ permission: rolePermissionsTable.permission })
+    .from(rolePermissionsTable)
+    .where(eq(rolePermissionsTable.roleId, roleId));
+  return perms.map(p => p.permission);
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -41,17 +61,21 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
+  const permissions = await loadPermissions(user[0].role, user[0].roleId ?? null);
+
   req.user = {
     id: user[0].id,
     email: user[0].email,
     name: user[0].name,
     nameAr: user[0].nameAr,
     role: user[0].role,
+    roleId: user[0].roleId ?? null,
     orgId: user[0].orgId,
     branchId: user[0].branchId,
     department: user[0].department,
     jobTitle: user[0].jobTitle,
     mustChangePassword: user[0].mustChangePassword,
+    permissions,
   };
   next();
 }
@@ -63,6 +87,22 @@ export function requireRole(...roles: string[]) {
       return;
     }
     if (!roles.includes(req.user.role)) {
+      res.status(403).json({ error: "Forbidden", message: "Insufficient permissions" });
+      return;
+    }
+    next();
+  };
+}
+
+export function requirePermission(...permissions: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const userPerms = req.user.permissions;
+    const hasAny = permissions.some(p => userPerms.includes(p));
+    if (!hasAny) {
       res.status(403).json({ error: "Forbidden", message: "Insufficient permissions" });
       return;
     }

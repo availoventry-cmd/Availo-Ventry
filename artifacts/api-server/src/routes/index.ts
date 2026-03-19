@@ -15,6 +15,7 @@ import publicRouter from "./publicRoutes.js";
 import notificationsRouter from "./notifications.js";
 import verificationRouter from "./verification.js";
 import telegramRouter from "./telegram.js";
+import rolesRouter from "./roles.js";
 
 const router = Router();
 
@@ -29,6 +30,7 @@ router.use("/organizations/:orgId/visit-requests", visitRequestsRouter);
 router.use("/organizations/:orgId/blacklist", blacklistRouter);
 router.use("/organizations/:orgId/audit-logs", auditLogsRouter);
 router.use("/organizations/:orgId/reports", reportsRouter);
+router.use("/organizations/:orgId/roles", rolesRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/public", publicRouter);
 router.use("/notifications", notificationsRouter);

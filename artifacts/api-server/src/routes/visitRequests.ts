@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, visitRequestsTable, visitorsTable, usersTable, branchesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId, generateQrCode, generateToken } from "../lib/id.js";
 import { addHours } from "../lib/dateUtils.js";
 import { notifyVisitApproved, notifyCheckIn, notifyRejection } from "../lib/notifyTelegram.js";
@@ -162,7 +162,7 @@ router.get("/:requestId", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // PATCH /api/organizations/:orgId/visit-requests/:requestId/approve
-router.patch("/:requestId/approve", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.patch("/:requestId/approve", requireAuth, requireOrgAccess, requirePermission("visit_requests.manage"), async (req, res) => {
   try {
     const { orgId, requestId } = req.params;
     await db.update(visitRequestsTable).set({
@@ -195,7 +195,7 @@ router.patch("/:requestId/approve", requireAuth, requireOrgAccess, requireRole("
 });
 
 // PATCH /api/organizations/:orgId/visit-requests/:requestId/reject
-router.patch("/:requestId/reject", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.patch("/:requestId/reject", requireAuth, requireOrgAccess, requirePermission("visit_requests.manage"), async (req, res) => {
   try {
     const { orgId, requestId } = req.params;
     await db.update(visitRequestsTable).set({
@@ -250,7 +250,7 @@ router.patch("/:requestId/cancel", requireAuth, requireOrgAccess, async (req, re
 });
 
 // PATCH /api/organizations/:orgId/visit-requests/:requestId/check-in
-router.patch("/:requestId/check-in", requireAuth, requireOrgAccess, requireRole("receptionist", "org_admin", "super_admin"), async (req, res) => {
+router.patch("/:requestId/check-in", requireAuth, requireOrgAccess, requirePermission("visit_requests.checkin"), async (req, res) => {
   try {
     const { orgId, requestId } = req.params;
     const checkInTime = new Date();
@@ -280,7 +280,7 @@ router.patch("/:requestId/check-in", requireAuth, requireOrgAccess, requireRole(
 });
 
 // PATCH /api/organizations/:orgId/visit-requests/:requestId/check-out
-router.patch("/:requestId/check-out", requireAuth, requireOrgAccess, requireRole("receptionist", "org_admin", "super_admin"), async (req, res) => {
+router.patch("/:requestId/check-out", requireAuth, requireOrgAccess, requirePermission("visit_requests.checkin"), async (req, res) => {
   try {
     const { orgId, requestId } = req.params;
     await db.update(visitRequestsTable).set({
@@ -296,7 +296,7 @@ router.patch("/:requestId/check-out", requireAuth, requireOrgAccess, requireRole
 });
 
 // POST /api/organizations/:orgId/visit-requests/scan-qr
-router.post("/scan-qr", requireAuth, requireOrgAccess, requireRole("receptionist", "org_admin", "super_admin"), async (req, res) => {
+router.post("/scan-qr", requireAuth, requireOrgAccess, requirePermission("visit_requests.checkin"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { qrCode } = req.body;
@@ -327,7 +327,7 @@ router.post("/scan-qr", requireAuth, requireOrgAccess, requireRole("receptionist
 });
 
 // POST /api/organizations/:orgId/visit-requests/batch-approve
-router.post("/batch-approve", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.post("/batch-approve", requireAuth, requireOrgAccess, requirePermission("visit_requests.manage"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { requestIds } = req.body;
@@ -355,7 +355,7 @@ router.post("/batch-approve", requireAuth, requireOrgAccess, requireRole("org_ad
 });
 
 // POST /api/organizations/:orgId/visit-requests/batch-reject
-router.post("/batch-reject", requireAuth, requireOrgAccess, requireRole("org_admin", "visitor_manager", "super_admin"), async (req, res) => {
+router.post("/batch-reject", requireAuth, requireOrgAccess, requirePermission("visit_requests.manage"), async (req, res) => {
   try {
     const { orgId } = req.params;
     const { requestIds, notes } = req.body;

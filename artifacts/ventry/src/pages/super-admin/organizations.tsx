@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useListOrganizations, useUpdateOrganizationStatus, useCreateOrganization, useUpdateOrganization, useResendAdminInvite } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,9 @@ export default function SuperAdminOrganizations() {
   const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editOrg, setEditOrg] = useState<any>(null);
+  const [adminUser, setAdminUser] = useState<any>(null);
+  const [adminForm, setAdminForm] = useState({ name: "", email: "" });
+  const [savingAdmin, setSavingAdmin] = useState(false);
   const [editForm, setEditForm] = useState({
     name: "", nameAr: "", type: "government", subscriptionTier: "starter",
     address: "", publicBookingSlug: "",
@@ -120,7 +123,19 @@ export default function SuperAdminOrganizations() {
       primaryContactEmail: org.primaryContactEmail || "",
       primaryContactPhone: org.primaryContactPhone || "",
     });
+    setAdminUser(null);
+    setAdminForm({ name: "", email: "" });
     setEditOpen(true);
+    fetch(`/api/organizations/${org.id}/users?role=org_admin&limit=1`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        const users = data.data || data || [];
+        if (users[0]) {
+          setAdminUser(users[0]);
+          setAdminForm({ name: users[0].name || "", email: users[0].email || "" });
+        }
+      })
+      .catch(() => {});
   };
 
   const handleSave = async () => {
@@ -136,6 +151,36 @@ export default function SuperAdminOrganizations() {
       }});
     } catch {
       toast({ title: "Failed", description: "Could not update organization.", variant: "destructive" });
+    }
+  };
+
+  const handleSaveAdmin = async () => {
+    if (!adminUser || !editOrg) return;
+    if (!adminForm.name || !adminForm.email) {
+      toast({ title: "Missing fields", description: "Admin name and email are required.", variant: "destructive" });
+      return;
+    }
+    setSavingAdmin(true);
+    try {
+      const res = await fetch(`/api/organizations/${editOrg.id}/users/${adminUser.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ name: adminForm.name, email: adminForm.email }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to update admin");
+      }
+      const updated = await res.json();
+      setAdminUser(updated);
+      toast({ title: "Admin Updated", description: `Admin details updated to ${adminForm.name} (${adminForm.email}).` });
+      queryClient.invalidateQueries({ predicate: (query) => {
+        const key = query.queryKey[0];
+        return typeof key === "string" && key.startsWith("/api/organizations");
+      }});
+    } catch (e: any) {
+      toast({ title: "Update Failed", description: e.message || "Could not update admin.", variant: "destructive" });
+    } finally {
+      setSavingAdmin(false);
     }
   };
 
@@ -474,19 +519,44 @@ export default function SuperAdminOrganizations() {
             </TabsContent>
 
             <TabsContent value="contact" className="space-y-4 mt-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Contact Name</Label>
-                  <Input className="rounded-xl" value={editForm.primaryContactName} onChange={e => setEditForm(f => ({ ...f, primaryContactName: e.target.value }))} />
+              {adminUser && (
+                <div className="border rounded-xl p-4 space-y-3 bg-blue-50/50 border-blue-200/60">
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-blue-500" /> Admin Account
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label>Admin Name</Label>
+                      <Input className="rounded-xl bg-white" value={adminForm.name} onChange={e => setAdminForm(f => ({ ...f, name: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Admin Email (Login)</Label>
+                      <Input type="email" className="rounded-xl bg-white" value={adminForm.email} onChange={e => setAdminForm(f => ({ ...f, email: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button size="sm" className="rounded-xl gap-1.5" onClick={handleSaveAdmin} disabled={savingAdmin || (adminForm.name === adminUser.name && adminForm.email === adminUser.email)}>
+                      {savingAdmin ? "Saving..." : "Update Admin"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <div className="border-t pt-4 space-y-4">
+                <p className="text-sm font-semibold text-slate-700">Primary Contact</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Contact Name</Label>
+                    <Input className="rounded-xl" value={editForm.primaryContactName} onChange={e => setEditForm(f => ({ ...f, primaryContactName: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Contact Email</Label>
+                    <Input type="email" className="rounded-xl" value={editForm.primaryContactEmail} onChange={e => setEditForm(f => ({ ...f, primaryContactEmail: e.target.value }))} />
+                  </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Contact Email</Label>
-                  <Input type="email" className="rounded-xl" value={editForm.primaryContactEmail} onChange={e => setEditForm(f => ({ ...f, primaryContactEmail: e.target.value }))} />
+                  <Label>Contact Phone</Label>
+                  <Input className="rounded-xl" value={editForm.primaryContactPhone} onChange={e => setEditForm(f => ({ ...f, primaryContactPhone: e.target.value }))} />
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Contact Phone</Label>
-                <Input className="rounded-xl" value={editForm.primaryContactPhone} onChange={e => setEditForm(f => ({ ...f, primaryContactPhone: e.target.value }))} />
               </div>
             </TabsContent>
           </Tabs>

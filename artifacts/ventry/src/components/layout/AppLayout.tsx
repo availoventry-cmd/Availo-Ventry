@@ -23,7 +23,6 @@ import {
   Settings, 
   LogOut,
   ShieldAlert,
-  UserSquare2,
   ScanLine,
   Send,
   ShieldCheck
@@ -36,55 +35,60 @@ export function AppLayout({ children }: { children: ReactNode }) {
   if (!user) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
 
   const getNavItems = () => {
-    switch (user.role) {
-      case "super_admin":
-        return [
-          { title: "Dashboard", url: "/super-admin/dashboard", icon: LayoutDashboard },
-          { title: "Organizations", url: "/super-admin/organizations", icon: Building2 },
-          { title: "Analytics", url: "/super-admin/analytics", icon: ShieldAlert },
-        ];
-      case "org_admin":
-        return [
-          { title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard },
-          { title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck },
-          { title: "Visitors", url: "/portal/visitors", icon: Users },
-          { title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck },
-          { title: "Settings", url: "/portal/settings", icon: Settings },
-          { title: "Telegram Bot", url: "/settings/telegram", icon: Send },
-        ];
-      case "visitor_manager":
-      case "receptionist":
-      case "host_employee":
-      default: {
-        const items = [];
-        if (user.role === "receptionist") {
-          items.push({ title: "Desk Console", url: "/receptionist", icon: ScanLine });
-        }
-        if (user.role === "host_employee") {
-          items.push({ title: "My Visitors", url: "/host", icon: UserSquare2 });
-          items.push({ title: "New Request", url: "/host/new", icon: CalendarCheck });
-        }
-        if (hasPermission("dashboard.view") && user.role !== "receptionist" && user.role !== "host_employee") {
-          items.push({ title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard });
-        }
-        if (hasAnyPermission("visit_requests.view", "visit_requests.approve", "visit_requests.create", "visit_requests.check_in")) {
-          items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
-        }
-        if (hasPermission("visitors.view")) {
-          items.push({ title: "Visitors", url: "/portal/visitors", icon: Users });
-        }
-        if (hasPermission("roles.view")) {
-          items.push({ title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck });
-        }
-        if (hasPermission("settings.view")) {
-          items.push({ title: "Settings", url: "/portal/settings", icon: Settings });
-        }
-        if (hasPermission("telegram.manage")) {
-          items.push({ title: "Telegram Bot", url: "/settings/telegram", icon: Send });
-        }
-        return items;
-      }
+    if (user.role === "super_admin") {
+      return [
+        { title: "Dashboard", url: "/super-admin/dashboard", icon: LayoutDashboard },
+        { title: "Organizations", url: "/super-admin/organizations", icon: Building2 },
+        { title: "Analytics", url: "/super-admin/analytics", icon: ShieldAlert },
+      ];
     }
+
+    if (user.role === "org_admin") {
+      return [
+        { title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard },
+        { title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck },
+        { title: "Visitors", url: "/portal/visitors", icon: Users },
+        { title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck },
+        { title: "Settings", url: "/portal/settings", icon: Settings },
+        { title: "Telegram Bot", url: "/settings/telegram", icon: Send },
+      ];
+    }
+
+    const items = [];
+
+    if (hasAnyPermission("visit_requests.check_in", "visit_requests.check_out")) {
+      items.push({ title: "Desk Console", url: "/receptionist", icon: ScanLine });
+    }
+
+    if (hasPermission("dashboard.view")) {
+      items.push({ title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard });
+    }
+
+    if (hasAnyPermission("visit_requests.view", "visit_requests.approve", "visit_requests.create")) {
+      items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
+    }
+
+    if (hasPermission("visit_requests.create")) {
+      items.push({ title: "New Request", url: "/host/new", icon: CalendarCheck });
+    }
+
+    if (hasPermission("visitors.view")) {
+      items.push({ title: "Visitors", url: "/portal/visitors", icon: Users });
+    }
+
+    if (hasPermission("roles.view")) {
+      items.push({ title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck });
+    }
+
+    if (hasAnyPermission("settings.view", "settings.manage")) {
+      items.push({ title: "Settings", url: "/portal/settings", icon: Settings });
+    }
+
+    if (hasPermission("telegram.manage")) {
+      items.push({ title: "Telegram Bot", url: "/settings/telegram", icon: Send });
+    }
+
+    return items;
   };
 
   const navItems = getNavItems();

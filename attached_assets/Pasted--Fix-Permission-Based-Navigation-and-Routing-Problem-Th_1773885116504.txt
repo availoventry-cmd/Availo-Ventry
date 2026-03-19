@@ -1,0 +1,243 @@
+# Fix Permission-Based Navigation and Routing
+
+## Problem
+The dynamic roles/permissions system was added but the sidebar navigation and route protection still use hardcoded role checks in several places. This means if an org admin creates a custom role with check-in permissions, that user still can't see or access the Desk Console. Same issue for host employee features.
+
+## Files to Modify
+1. `artifacts/ventry/src/components/layout/AppLayout.tsx`
+2. `artifacts/ventry/src/App.tsx`
+
+No other files need to change. Do NOT modify any backend files, database schemas, or other frontend files.
+
+---
+
+## Fix 1: AppLayout.tsx — Make sidebar fully permission-based
+
+Replace the entire `getNavItems()` function (lines 38-88) with this logic:
+
+```typescript
+const getNavItems = () => {
+  // Super admin has its own fixed navigation
+  if (user.role === "super_admin") {
+    return [
+      { title: "Dashboard", url: "/super-admin/dashboard", icon: LayoutDashboard },
+      { title: "Organizations", url: "/super-admin/organizations", icon: Building2 },
+      { title: "Analytics", url: "/super-admin/analytics", icon: ShieldAlert },
+    ];
+  }
+
+  // Org admin has full access — fixed navigation
+  if (user.role === "org_admin") {
+    return [
+      { title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard },
+      { title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck },
+      { title: "Visitors", url: "/portal/visitors", icon: Users },
+      { title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck },
+      { title: "Settings", url: "/portal/settings", icon: Settings },
+      { title: "Telegram Bot", url: "/settings/telegram", icon: Send },
+    ];
+  }
+
+  // All other roles (default + custom) — fully permission-based
+  const items = [];
+
+  // Desk Console: shown if user can check in or check out visitors
+  if (hasAnyPermission("visit_requests.check_in", "visit_requests.check_out")) {
+    items.push({ title: "Desk Console", url: "/receptionist", icon: ScanLine });
+  }
+
+  // Dashboard
+  if (hasPermission("dashboard.view")) {
+    items.push({ title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard });
+  }
+
+  // Visit Requests
+  if (hasAnyPermission("visit_requests.view", "visit_requests.approve", "visit_requests.create")) {
+    items.push({ title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck });
+  }
+
+  // New Request (for host employees or anyone with create permission)
+  if (hasPermission("visit_requests.create")) {
+    items.push({ title: "New Request", url: "/host/new", icon: CalendarCheck });
+  }
+
+  // Visitors
+  if (hasPermission("visitors.view")) {
+    items.push({ title: "Visitors", url: "/portal/visitors", icon: Users });
+  }
+
+  // Roles & Permissions
+  if (hasPermission("roles.view")) {
+    items.push({ title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck });
+  }
+
+  // Settings
+  if (hasAnyPermission("settings.view", "settings.manage")) {
+    items.push({ title: "Settings", url: "/portal/settings", icon: Settings });
+  }
+
+  // Telegram
+  if (hasPermission("telegram.manage")) {
+    items.push({ title: "Telegram Bot", url: "/settings/telegram", icon: Send });
+  }
+
+  return items;
+};
+```
+
+Also remove the `UserSquare2` import from lucide-react since we no longer use the "My Visitors" nav item (it's replaced by "Visit Requests" which already shows the same data filtered by user). Keep all other imports.
+
+---
+
+## Fix 2: App.tsx — Make routes permission-based
+
+### 2a. Update ProtectedRoute to support multiple permissions
+
+Change the `ProtectedRoute` component to accept an optional `requiredAnyPermission` prop (array of strings) in addition to the existing `requiredPermission` (single string):
+
+```typescript
+function ProtectedRoute({ 
+  component: Component, 
+  allowedRoles, 
+  requiredPermission,
+  requiredAnyPermission 
+}: { 
+  component: any, 
+  allowedRoles?: string[], 
+  requiredPermission?: string,
+  requiredAnyPermission?: string[] 
+}) {
+  const { user, isLoading, isFetching, hasPermission, hasAnyPermission } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && !isFetching && !user) {
+      setLocation("/login");
+    }
+  }, [isLoading, isFetching, user, setLocation]);
+
+  if ((isLoading || isFetching) && !user) {
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
+  }
+  if (!user) return null;
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return <div className="p-8 text-center text-red-600">Access Denied</div>;
+  }
+  if (requiredPermission && !hasPermission(requiredPermission)) {
+    return <div className="p-8 text-center text-red-600">You do not have permission to view this page.</div>;
+  }
+  if (requiredAnyPermission && !hasAnyPermission(...requiredAnyPermission)) {
+    return <div className="p-8 text-center text-red-600">You do not have permission to view this page.</div>;
+  }
+
+  return (
+    <AppLayout>
+      <Component />
+    </AppLayout>
+  );
+}
+```
+
+### 2b. Update getRoleHome to be permission-aware
+
+Replace the `getRoleHome` function with a version that checks permissions:
+
+```typescript
+function getRoleHome(role: string, permissions: string[]) {
+  if (role === 'super_admin') return '/super-admin/dashboard';
+  if (role === 'org_admin') return '/portal/dashboard';
+  
+  // For all other roles, find the best landing page based on permissions
+  if (permissions.includes('visit_requests.check_in') || permissions.includes('visit_requests.check_out')) {
+    return '/receptionist';
+  }
+  if (permissions.includes('dashboard.view')) {
+    return '/portal/dashboard';
+  }
+  if (permissions.includes('visit_requests.view') || permissions.includes('visit_requests.create')) {
+    return '/portal/visit-requests';
+  }
+  if (permissions.includes('visitors.view')) {
+    return '/portal/visitors';
+  }
+  // Fallback
+  return '/portal/dashboard';
+}
+```
+
+### 2c. Update RootRedirect to pass permissions
+
+Update the `RootRedirect` function to pass permissions to `getRoleHome`:
+
+```typescript
+function RootRedirect() {
+  const { user, isLoading, isFetching } = useAuth();
+
+  if (isLoading || (isFetching && !user)) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (!user) return <Redirect to="/login" />;
+  const permissions: string[] = (user as any).permissions ?? [];
+  return <Redirect to={getRoleHome(user.role, permissions)} />;
+}
+```
+
+### 2d. Update the route definitions
+
+Change these three routes from role-based to permission-based:
+
+**Before:**
+```tsx
+{/* Host Employee Routes */}
+<Route path="/host">
+  {() => <ProtectedRoute component={HostDashboard} allowedRoles={['host_employee']} />}
+</Route>
+<Route path="/host/new">
+  {() => <ProtectedRoute component={HostNewRequest} allowedRoles={['host_employee']} />}
+</Route>
+
+{/* Receptionist Route */}
+<Route path="/receptionist">
+  {() => <ProtectedRoute component={ReceptionistDashboard} allowedRoles={['receptionist']} />}
+</Route>
+```
+
+**After:**
+```tsx
+{/* Host Employee Routes — permission-based */}
+<Route path="/host">
+  {() => <ProtectedRoute component={HostDashboard} requiredPermission="visit_requests.view" />}
+</Route>
+<Route path="/host/new">
+  {() => <ProtectedRoute component={HostNewRequest} requiredPermission="visit_requests.create" />}
+</Route>
+
+{/* Desk Console — permission-based */}
+<Route path="/receptionist">
+  {() => <ProtectedRoute component={ReceptionistDashboard} requiredAnyPermission={["visit_requests.check_in", "visit_requests.check_out"]} />}
+</Route>
+```
+
+---
+
+## Summary of What This Fixes
+
+| Feature | Before (broken) | After (fixed) |
+|---------|-----------------|---------------|
+| Desk Console sidebar | Only shows for `role === "receptionist"` | Shows for anyone with `visit_requests.check_in` or `visit_requests.check_out` |
+| Desk Console route `/receptionist` | Only allows `allowedRoles: ['receptionist']` | Allows anyone with `visit_requests.check_in` or `visit_requests.check_out` |
+| Host Dashboard `/host` | Only allows `allowedRoles: ['host_employee']` | Allows anyone with `visit_requests.view` |
+| New Request `/host/new` | Only allows `allowedRoles: ['host_employee']` | Allows anyone with `visit_requests.create` |
+| New Request sidebar item | Only shows for `role === "host_employee"` | Shows for anyone with `visit_requests.create` |
+| Home redirect after login | Hardcoded by role name | Based on permissions (check_in users go to Desk Console, others go to Dashboard) |
+
+## Do NOT Change
+- Any backend files
+- Any database schemas
+- The super_admin or org_admin navigation (these stay fixed)
+- Any other frontend pages or components
+- The `use-auth.tsx` hook (it already has `hasPermission` and `hasAnyPermission`)
+
+## Test After Applying
+1. Login as receptionist (`reception@moi.gov.sa` / `Recept@123`) — should see Desk Console
+2. Login as host employee (`employee@moi.gov.sa` / `Host@1234`) — should see New Request and Visit Requests
+3. Login as org admin — go to Roles & Permissions — edit the Receptionist role and REMOVE `visit_requests.check_in` — login as receptionist again — Desk Console should disappear from sidebar
+4. Create a custom role with only `visit_requests.check_in` + `visit_requests.check_out` — assign it to a user — that user should see Desk Console

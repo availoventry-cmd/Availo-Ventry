@@ -46,9 +46,18 @@ import PortalRoles from "@/pages/portal/roles";
 
 const queryClient = new QueryClient();
 
-// Protected Route Wrapper
-function ProtectedRoute({ component: Component, allowedRoles, requiredPermission }: { component: any, allowedRoles?: string[], requiredPermission?: string }) {
-  const { user, isLoading, isFetching, hasPermission } = useAuth();
+function ProtectedRoute({ 
+  component: Component, 
+  allowedRoles, 
+  requiredPermission,
+  requiredAnyPermission 
+}: { 
+  component: any, 
+  allowedRoles?: string[], 
+  requiredPermission?: string,
+  requiredAnyPermission?: string[] 
+}) {
+  const { user, isLoading, isFetching, hasPermission, hasAnyPermission } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -57,7 +66,6 @@ function ProtectedRoute({ component: Component, allowedRoles, requiredPermission
     }
   }, [isLoading, isFetching, user, setLocation]);
 
-  // Wait until we have a definitive answer — either user data or confirmation of no session
   if ((isLoading || isFetching) && !user) {
     return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   }
@@ -68,6 +76,9 @@ function ProtectedRoute({ component: Component, allowedRoles, requiredPermission
   if (requiredPermission && !hasPermission(requiredPermission)) {
     return <div className="p-8 text-center text-red-600">You do not have permission to view this page.</div>;
   }
+  if (requiredAnyPermission && !hasAnyPermission(...requiredAnyPermission)) {
+    return <div className="p-8 text-center text-red-600">You do not have permission to view this page.</div>;
+  }
 
   return (
     <AppLayout>
@@ -76,20 +87,41 @@ function ProtectedRoute({ component: Component, allowedRoles, requiredPermission
   );
 }
 
-function getRoleHome(role: string) {
+function getRoleHome(role: string, permissions: string[]) {
   if (role === 'super_admin') return '/super-admin/dashboard';
-  if (role === 'receptionist') return '/receptionist';
-  if (role === 'host_employee') return '/host';
+  if (role === 'org_admin') return '/portal/dashboard';
+  
+  if (permissions.includes('visit_requests.check_in') || permissions.includes('visit_requests.check_out')) {
+    return '/receptionist';
+  }
+  if (permissions.includes('dashboard.view')) {
+    return '/portal/dashboard';
+  }
+  if (permissions.includes('visit_requests.view') || permissions.includes('visit_requests.approve') || permissions.includes('visit_requests.create')) {
+    return '/portal/visit-requests';
+  }
+  if (permissions.includes('visitors.view')) {
+    return '/portal/visitors';
+  }
+  if (permissions.includes('roles.view')) {
+    return '/portal/roles';
+  }
+  if (permissions.includes('settings.view') || permissions.includes('settings.manage')) {
+    return '/portal/settings';
+  }
+  if (permissions.includes('telegram.manage')) {
+    return '/settings/telegram';
+  }
   return '/portal/dashboard';
 }
 
-// Redirect root based on role
 function RootRedirect() {
   const { user, isLoading, isFetching } = useAuth();
 
   if (isLoading || (isFetching && !user)) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   if (!user) return <Redirect to="/login" />;
-  return <Redirect to={getRoleHome(user.role)} />;
+  const permissions: string[] = (user as any).permissions ?? [];
+  return <Redirect to={getRoleHome(user.role, permissions)} />;
 }
 
 function Router() {
@@ -117,29 +149,29 @@ function Router() {
         {() => <ProtectedRoute component={PortalDashboard} requiredPermission="dashboard.view" />}
       </Route>
       <Route path="/portal/visit-requests">
-        {() => <ProtectedRoute component={VisitRequests} requiredPermission="visit_requests.view" />}
+        {() => <ProtectedRoute component={VisitRequests} requiredAnyPermission={["visit_requests.view", "visit_requests.approve", "visit_requests.create"]} />}
       </Route>
       <Route path="/portal/visitors">
         {() => <ProtectedRoute component={PortalVisitors} requiredPermission="visitors.view" />}
       </Route>
       <Route path="/portal/settings">
-        {() => <ProtectedRoute component={PortalSettings} requiredPermission="settings.view" />}
+        {() => <ProtectedRoute component={PortalSettings} requiredAnyPermission={["settings.view", "settings.manage"]} />}
       </Route>
       <Route path="/portal/roles">
         {() => <ProtectedRoute component={PortalRoles} requiredPermission="roles.view" />}
       </Route>
 
-      {/* Host Employee Routes */}
+      {/* Host Employee Routes — permission-based */}
       <Route path="/host">
-        {() => <ProtectedRoute component={HostDashboard} allowedRoles={['host_employee']} />}
+        {() => <ProtectedRoute component={HostDashboard} requiredPermission="visit_requests.view" />}
       </Route>
       <Route path="/host/new">
-        {() => <ProtectedRoute component={HostNewRequest} allowedRoles={['host_employee']} />}
+        {() => <ProtectedRoute component={HostNewRequest} requiredPermission="visit_requests.create" />}
       </Route>
 
-      {/* Receptionist Route */}
+      {/* Desk Console — permission-based */}
       <Route path="/receptionist">
-        {() => <ProtectedRoute component={ReceptionistDashboard} allowedRoles={['receptionist']} />}
+        {() => <ProtectedRoute component={ReceptionistDashboard} requiredAnyPermission={["visit_requests.check_in", "visit_requests.check_out"]} />}
       </Route>
 
       {/* Settings */}

@@ -24,4 +24,6 @@ export interface CreateOrganizationRequest {
   firstAdminName: string;
   firstAdminEmail: string;
   firstAdminPhone?: string | null;
+  /** If provided (min 8 chars), creates the admin user directly instead of sending an invitation email */
+  firstAdminPassword?: string | null;
 }

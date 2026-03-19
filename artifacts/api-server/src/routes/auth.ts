@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { db, usersTable, invitationsTable, organizationsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, gt } from "drizzle-orm";
 import { requireAuth, loadPermissions, resolveRoleId } from "../lib/auth.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
-import { generateId } from "../lib/id.js";
+import { generateId, generateToken } from "../lib/id.js";
+import { sendEmail, buildPasswordResetEmail, getBaseUrl } from "../lib/email.js";
 
 const router = Router();
 
@@ -253,6 +254,85 @@ router.post("/accept-invitation", async (req, res) => {
     });
   } catch (err) {
     console.error("Accept invitation error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// POST /api/auth/forgot-password
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      res.status(400).json({ error: "Email is required" });
+      return;
+    }
+
+    const users = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase())).limit(1);
+    const user = users[0];
+
+    if (user) {
+      const resetToken = generateToken(32);
+      const expires = new Date(Date.now() + 30 * 60 * 1000);
+
+      await db.update(usersTable).set({
+        passwordResetToken: resetToken,
+        passwordResetExpires: expires,
+      }).where(eq(usersTable.id, user.id));
+
+      const baseUrl = getBaseUrl(req);
+      const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+
+      await sendEmail({
+        to: user.email,
+        subject: "Reset your Availo Ventry password",
+        html: buildPasswordResetEmail({
+          recipientName: user.name,
+          resetLink,
+          expiresInMinutes: 30,
+        }),
+      });
+    }
+
+    res.json({ success: true, message: "If an account exists with that email, a reset link has been sent." });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// POST /api/auth/reset-password
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      res.status(400).json({ error: "Token and new password are required" });
+      return;
+    }
+    if (newPassword.length < 8) {
+      res.status(400).json({ error: "Password must be at least 8 characters" });
+      return;
+    }
+
+    const users = await db.select().from(usersTable)
+      .where(and(eq(usersTable.passwordResetToken, token), gt(usersTable.passwordResetExpires, new Date())))
+      .limit(1);
+
+    if (!users[0]) {
+      res.status(400).json({ error: "Invalid or expired reset token" });
+      return;
+    }
+
+    await db.update(usersTable).set({
+      passwordHash: hashPassword(newPassword),
+      passwordResetToken: null,
+      passwordResetExpires: null,
+      passwordChangedAt: new Date(),
+      mustChangePassword: false,
+    }).where(eq(usersTable.id, users[0].id));
+
+    res.json({ success: true, message: "Password has been reset. You can now log in." });
+  } catch (err) {
+    console.error("Reset password error:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });

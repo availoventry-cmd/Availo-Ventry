@@ -146,6 +146,33 @@ export const VerifyInvitationTokenResponse = zod.object({
 });
 
 /**
+ * @summary Request a password reset email
+ */
+export const ForgotPasswordBody = zod.object({
+  email: zod.string().email(),
+});
+
+export const ForgotPasswordResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Reset password using token from email
+ */
+export const resetPasswordBodyNewPasswordMin = 8;
+
+export const ResetPasswordBody = zod.object({
+  token: zod.string(),
+  newPassword: zod.string().min(resetPasswordBodyNewPasswordMin),
+});
+
+export const ResetPasswordResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
  * @summary Change user password
  */
 export const changePasswordBodyNewPasswordMin = 8;
@@ -250,6 +277,12 @@ export const CreateOrganizationBody = zod.object({
   firstAdminName: zod.string(),
   firstAdminEmail: zod.string().email(),
   firstAdminPhone: zod.string().nullish(),
+  firstAdminPassword: zod
+    .string()
+    .nullish()
+    .describe(
+      "If provided (min 8 chars), creates the admin user directly instead of sending an invitation email",
+    ),
 });
 
 /**

@@ -38,6 +38,8 @@ export const usersTable = pgTable("users", {
   deactivatedAt: timestamp("deactivated_at"),
   deactivatedById: text("deactivated_by_id"),
   roleId: text("role_id"),
+  passwordResetToken: text("password_reset_token"),
+  passwordResetExpires: timestamp("password_reset_expires"),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({

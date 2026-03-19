@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { db, invitationsTable } from "@workspace/db";
+import { db, invitationsTable, organizationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId, generateToken } from "../lib/id.js";
 import { addDays } from "../lib/dateUtils.js";
+import { sendEmail, buildInvitationEmail, getBaseUrl } from "../lib/email.js";
 
 const router = Router({ mergeParams: true });
 
@@ -67,7 +68,24 @@ router.post("/", requireAuth, requireOrgAccess, requirePermission("invitations.m
     });
 
     const invitations = await db.select().from(invitationsTable).where(eq(invitationsTable.id, id)).limit(1);
-    res.status(201).json({ ...invitations[0], invitationLink: `/accept-invitation?token=${token}` });
+
+    const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+    const baseUrl = getBaseUrl(req);
+    const invitationLink = `${baseUrl}/accept-invitation?token=${token}`;
+
+    const emailSent = await sendEmail({
+      to: email.toLowerCase(),
+      subject: `You're invited to join ${org?.name || "an organization"} on Availo Ventry`,
+      html: buildInvitationEmail({
+        recipientName: name,
+        organizationName: org?.name || "an organization",
+        role,
+        invitationLink,
+        expiresInDays: 3,
+      }),
+    });
+
+    res.status(201).json({ ...invitations[0], invitationLink, emailSent });
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error" });
   }
@@ -98,6 +116,23 @@ router.post("/:invitationId/resend", requireAuth, requireOrgAccess, requirePermi
     }).where(eq(invitationsTable.id, invitationId));
 
     const updated = await db.select().from(invitationsTable).where(eq(invitationsTable.id, invitationId)).limit(1);
+
+    const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, req.params.orgId)).limit(1);
+    const baseUrl = getBaseUrl(req);
+    const invLink = `${baseUrl}/accept-invitation?token=${newToken}`;
+
+    await sendEmail({
+      to: inv.email,
+      subject: `Reminder: You're invited to join ${org?.name || "an organization"} on Availo Ventry`,
+      html: buildInvitationEmail({
+        recipientName: inv.name,
+        organizationName: org?.name || "an organization",
+        role: inv.role,
+        invitationLink: invLink,
+        expiresInDays: 3,
+      }),
+    });
+
     res.json(updated[0]);
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error" });

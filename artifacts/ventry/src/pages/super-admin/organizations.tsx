@@ -35,6 +35,8 @@ export default function SuperAdminOrganizations() {
   const [form, setForm] = useState({
     name: "", nameAr: "", type: "government", subscriptionTier: "starter",
     firstAdminName: "", firstAdminEmail: "", primaryContactName: "", primaryContactEmail: "",
+    adminSetupMode: "invitation" as "invitation" | "direct",
+    firstAdminPassword: "",
   });
 
   const { data, isLoading, refetch } = useListOrganizations({
@@ -61,11 +63,23 @@ export default function SuperAdminOrganizations() {
       toast({ title: "Missing fields", description: "Fill all required fields.", variant: "destructive" });
       return;
     }
+    if (form.adminSetupMode === "direct" && form.firstAdminPassword.length < 8) {
+      toast({ title: "Password too short", description: "Password must be at least 8 characters.", variant: "destructive" });
+      return;
+    }
     try {
-      await createMutation.mutateAsync({ data: form });
-      toast({ title: "Organization Created", description: `${form.name} has been created and an invitation sent to the admin.` });
+      const payload: any = { ...form };
+      if (form.adminSetupMode !== "direct") {
+        delete payload.firstAdminPassword;
+      }
+      await createMutation.mutateAsync({ data: payload });
+      if (form.adminSetupMode === "direct") {
+        toast({ title: "Organization Created", description: `Admin can now log in with ${form.firstAdminEmail}.` });
+      } else {
+        toast({ title: "Organization Created", description: `Invitation email sent to ${form.firstAdminEmail}.` });
+      }
       setCreateOpen(false);
-      setForm({ name: "", nameAr: "", type: "government", subscriptionTier: "starter", firstAdminName: "", firstAdminEmail: "", primaryContactName: "", primaryContactEmail: "" });
+      setForm({ name: "", nameAr: "", type: "government", subscriptionTier: "starter", firstAdminName: "", firstAdminEmail: "", primaryContactName: "", primaryContactEmail: "", adminSetupMode: "invitation", firstAdminPassword: "" });
       refetch();
     } catch {
       toast({ title: "Failed", description: "Could not create organization.", variant: "destructive" });
@@ -257,6 +271,26 @@ export default function SuperAdminOrganizations() {
                   <Input type="email" placeholder="admin@org.sa" className="rounded-xl" value={form.firstAdminEmail} onChange={e => setForm(f => ({ ...f, firstAdminEmail: e.target.value }))} />
                 </div>
               </div>
+              <div className="space-y-3 mt-3">
+                <Label className="text-xs text-slate-500">Admin Setup Method</Label>
+                <div className="flex gap-2">
+                  <Button type="button" variant={form.adminSetupMode === "invitation" ? "default" : "outline"} size="sm" className="rounded-xl flex-1"
+                    onClick={() => setForm(f => ({ ...f, adminSetupMode: "invitation", firstAdminPassword: "" }))}>
+                    Send Invitation Email
+                  </Button>
+                  <Button type="button" variant={form.adminSetupMode === "direct" ? "default" : "outline"} size="sm" className="rounded-xl flex-1"
+                    onClick={() => setForm(f => ({ ...f, adminSetupMode: "direct" }))}>
+                    Set Password Directly
+                  </Button>
+                </div>
+              </div>
+              {form.adminSetupMode === "direct" && (
+                <div className="space-y-1.5 mt-3">
+                  <Label>Admin Password *</Label>
+                  <Input type="password" placeholder="Minimum 8 characters" className="rounded-xl"
+                    value={form.firstAdminPassword} onChange={e => setForm(f => ({ ...f, firstAdminPassword: e.target.value }))} />
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

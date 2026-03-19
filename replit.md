@@ -151,8 +151,21 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 | Receptionist | reception@moi.gov.sa | Recept@123 |
 | Host Employee | employee@moi.gov.sa | Host@1234 |
 
+### Email System
+- **SMTP**: Gmail SMTP via nodemailer (`artifacts/api-server/src/lib/email.ts`)
+- **Secrets**: `SMTP_EMAIL`, `SMTP_PASSWORD` (Gmail App Password)
+- **Optional**: `APP_BASE_URL` env var for trusted link generation in emails (falls back to `REPLIT_DEV_DOMAIN`)
+- **Email triggers**: invitation create/resend, org creation (invitation mode), forgot-password, visit approval
+- **Templates**: `buildInvitationEmail`, `buildPasswordResetEmail`, `buildVisitApprovedEmail`
+
+### Auth Pages
+- `/login` — password visibility toggle, "Forgot password?" link
+- `/forgot-password` — email form, success state
+- `/reset-password?token=...` — new password with visibility toggles
+- `/accept-invitation?token=...` — invitation accept, password set, auto-login
+
 ### API Routes (all under `/api`)
-- `/auth` — login, logout, me, accept-invitation, change-password
+- `/auth` — login, logout, me, accept-invitation, change-password, forgot-password, reset-password
 - `/organizations` — CRUD for super_admin
 - `/organizations/:orgId/branches` — branch management
 - `/organizations/:orgId/users` — user management

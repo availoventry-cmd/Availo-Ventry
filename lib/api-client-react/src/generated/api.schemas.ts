@@ -146,6 +146,16 @@ export interface InvitationTokenInfo {
   expiresAt: string;
 }
 
+export interface ForgotPasswordRequest {
+  email: string;
+}
+
+export interface ResetPasswordRequest {
+  token: string;
+  /** @minLength 8 */
+  newPassword: string;
+}
+
 export interface ChangePasswordRequest {
   currentPassword: string;
   /** @minLength 8 */
@@ -196,6 +206,8 @@ export interface CreateOrganizationRequest {
   firstAdminName: string;
   firstAdminEmail: string;
   firstAdminPhone?: string | null;
+  /** If provided (min 8 chars), creates the admin user directly instead of sending an invitation email */
+  firstAdminPassword?: string | null;
 }
 
 export interface UpdateOrganizationRequest {

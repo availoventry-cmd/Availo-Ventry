@@ -43,6 +43,9 @@ import PortalSettings from "@/pages/portal/settings";
 import HostDashboard from "@/pages/host/index";
 import HostNewRequest from "@/pages/host/new";
 import PortalRoles from "@/pages/portal/roles";
+import AcceptInvitation from "@/pages/auth/accept-invitation";
+import ForgotPassword from "@/pages/auth/forgot-password";
+import ResetPassword from "@/pages/auth/reset-password";
 
 const queryClient = new QueryClient();
 
@@ -129,6 +132,9 @@ function Router() {
     <Switch>
       <Route path="/" component={RootRedirect} />
       <Route path="/login" component={Login} />
+      <Route path="/accept-invitation" component={AcceptInvitation} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
       
       {/* Public Routes */}
       <Route path="/public/orgs/:slug" component={PublicBooking} />

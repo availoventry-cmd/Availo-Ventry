@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { db, visitRequestsTable, visitorsTable, usersTable, branchesTable } from "@workspace/db";
+import { db, visitRequestsTable, visitorsTable, usersTable, branchesTable, organizationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId, generateQrCode, generateToken } from "../lib/id.js";
 import { addHours } from "../lib/dateUtils.js";
 import { notifyVisitApproved, notifyCheckIn, notifyRejection } from "../lib/notifyTelegram.js";
+import { sendEmail, buildVisitApprovedEmail, getBaseUrl } from "../lib/email.js";
 
 const router = Router({ mergeParams: true });
 
@@ -175,6 +176,24 @@ router.patch("/:requestId/approve", requireAuth, requireOrgAccess, requirePermis
     const updated = await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1);
     const enriched = await enrichRequest(updated[0]);
     res.json(enriched);
+
+    // Fire-and-forget email notification
+    if (enriched.visitor?.email) {
+      const [visitOrg] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      const baseUrl = getBaseUrl(req);
+      const passLink = `${baseUrl}/public/pass/${enriched.trackingToken}`;
+      sendEmail({
+        to: enriched.visitor.email,
+        subject: `Your visit to ${visitOrg?.name || "the organization"} has been approved`,
+        html: buildVisitApprovedEmail({
+          visitorName: enriched.visitor.fullName,
+          organizationName: visitOrg?.name || "the organization",
+          scheduledDate: enriched.scheduledDate,
+          scheduledTime: enriched.scheduledTimeFrom || undefined,
+          passLink,
+        }),
+      }).catch(console.error);
+    }
 
     // Fire-and-forget Telegram notification
     if (enriched.visitor) {

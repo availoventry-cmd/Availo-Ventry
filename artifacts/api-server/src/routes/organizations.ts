@@ -7,6 +7,7 @@ import { hashPassword } from "../lib/password.js";
 import { addDays } from "../lib/dateUtils.js";
 import { invitationsTable } from "@workspace/db";
 import { DEFAULT_ROLE_PERMISSIONS } from "@workspace/db";
+import { sendEmail, buildInvitationEmail, getBaseUrl } from "../lib/email.js";
 
 const DEFAULT_ROLES = [
   { slug: "visitor_manager", name: "Visitor Manager" },
@@ -70,7 +71,7 @@ router.post("/", requireAuth, requireRole("super_admin"), async (req, res) => {
       maxUsers = 20, maxBranches = 5,
       contractStartDate, contractEndDate,
       primaryContactName, primaryContactEmail, primaryContactPhone,
-      firstAdminName, firstAdminEmail, firstAdminPhone,
+      firstAdminName, firstAdminEmail, firstAdminPhone, firstAdminPassword,
     } = req.body;
 
     if (!name || !type || !firstAdminName || !firstAdminEmail) {
@@ -105,27 +106,65 @@ router.post("/", requireAuth, requireRole("super_admin"), async (req, res) => {
       createdById: req.user!.id,
     });
 
-    // Auto-create default roles for this org
     await createDefaultRolesForOrg(orgId);
 
-    // Create invitation for first org admin
-    const inviteToken = generateToken();
-    const invId = generateId();
-    await db.insert(invitationsTable).values({
-      id: invId,
-      orgId,
-      invitedById: req.user!.id,
-      email: firstAdminEmail.toLowerCase(),
-      name: firstAdminName,
-      phone: firstAdminPhone,
-      role: "org_admin",
-      invitationToken: inviteToken,
-      tokenExpiresAt: addDays(new Date(), 3),
-      status: "pending",
-    });
+    if (firstAdminPassword !== undefined && firstAdminPassword !== null) {
+      if (firstAdminPassword.length < 8) {
+        res.status(400).json({ error: "Admin password must be at least 8 characters" });
+        return;
+      }
+    }
 
-    const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
-    res.status(201).json(orgs[0]);
+    if (firstAdminPassword && firstAdminPassword.length >= 8) {
+      const userId = generateId();
+      await db.insert(usersTable).values({
+        id: userId,
+        orgId,
+        name: firstAdminName,
+        email: firstAdminEmail.toLowerCase(),
+        phone: firstAdminPhone,
+        role: "org_admin",
+        passwordHash: hashPassword(firstAdminPassword),
+        isActive: true,
+        mustChangePassword: false,
+        twoFactorEnabled: false,
+      });
+
+      const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      res.status(201).json({ ...orgs[0], adminCreated: true, emailSent: false, invitationLink: null });
+    } else {
+      const inviteToken = generateToken();
+      const invId = generateId();
+      await db.insert(invitationsTable).values({
+        id: invId,
+        orgId,
+        invitedById: req.user!.id,
+        email: firstAdminEmail.toLowerCase(),
+        name: firstAdminName,
+        phone: firstAdminPhone,
+        role: "org_admin",
+        invitationToken: inviteToken,
+        tokenExpiresAt: addDays(new Date(), 3),
+        status: "pending",
+      });
+
+      const baseUrl = getBaseUrl(req);
+      const invitationLink = `${baseUrl}/accept-invitation?token=${inviteToken}`;
+      const emailSent = await sendEmail({
+        to: firstAdminEmail.toLowerCase(),
+        subject: `You're invited to manage ${name} on Availo Ventry`,
+        html: buildInvitationEmail({
+          recipientName: firstAdminName,
+          organizationName: name,
+          role: "org_admin",
+          invitationLink,
+          expiresInDays: 3,
+        }),
+      });
+
+      const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      res.status(201).json({ ...orgs[0], invitationLink, emailSent });
+    }
   } catch (err) {
     console.error("Create org error:", err);
     res.status(500).json({ error: "Internal Server Error" });

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -11,17 +11,19 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { ShieldCheck, ArrowRight, Loader2 } from "lucide-react";
+import { ShieldCheck, ArrowRight, Loader2, Eye, EyeOff } from "lucide-react";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email"),
   password: z.string().min(1, "Password is required"),
 });
 
-function getRoleHome(role: string) {
+function getRoleHome(role: string, permissions: string[] = []) {
   if (role === 'super_admin') return '/super-admin/dashboard';
-  if (role === 'receptionist') return '/receptionist';
-  if (role === 'host_employee') return '/host';
+  if (role === 'org_admin') return '/portal/dashboard';
+  if (permissions.includes('visit_requests.check_in') || permissions.includes('visit_requests.check_out')) return '/receptionist';
+  if (permissions.includes('dashboard.view')) return '/portal/dashboard';
+  if (permissions.includes('visit_requests.view') || permissions.includes('visit_requests.create')) return '/portal/visit-requests';
   return '/portal/dashboard';
 }
 
@@ -29,6 +31,7 @@ export default function Login() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [showPassword, setShowPassword] = useState(false);
   
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -42,11 +45,10 @@ export default function Login() {
       const res = await loginMutation.mutateAsync({ data });
       toast({ title: "Welcome back", description: "Successfully signed in." });
       
-      // Refetch the current user so AuthProvider has fresh data before we navigate
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
       
-      setLocation(getRoleHome(res.user.role));
+      setLocation(getRoleHome(res.user.role, res.user.permissions ?? []));
     } catch (error) {
       toast({
         title: "Login failed",
@@ -120,15 +122,25 @@ export default function Login() {
                     <FormItem>
                       <div className="flex items-center justify-between">
                         <FormLabel className="font-semibold">Password</FormLabel>
-                        <a href="#" className="text-sm font-medium text-primary hover:underline">Forgot password?</a>
+                        <Link href="/forgot-password" className="text-sm font-medium text-primary hover:underline">Forgot password?</Link>
                       </div>
                       <FormControl>
-                        <Input 
-                          type="password" 
-                          placeholder="••••••••" 
-                          className="h-12 rounded-xl bg-slate-50 border-slate-200 focus:bg-white transition-colors" 
-                          {...field} 
-                        />
+                        <div className="relative">
+                          <Input 
+                            type={showPassword ? "text" : "password"}
+                            placeholder="••••••••" 
+                            className="h-12 rounded-xl bg-slate-50 border-slate-200 focus:bg-white transition-colors pr-12" 
+                            {...field} 
+                          />
+                          <button
+                            type="button"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                            onClick={() => setShowPassword(!showPassword)}
+                            tabIndex={-1}
+                          >
+                            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                          </button>
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>

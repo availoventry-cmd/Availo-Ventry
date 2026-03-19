@@ -211,7 +211,7 @@ export default function PortalSettings() {
   ] as const;
 
   const allUsers = (usersData as any)?.data ?? usersData ?? [];
-  const branches = (branchesData as any)?.data ?? branchesData ?? [];
+  const branches = Array.isArray(branchesData) ? branchesData : (branchesData as any)?.data ?? [];
 
   const roleColor: Record<string, string> = {
     org_admin: "bg-violet-100 text-violet-700",

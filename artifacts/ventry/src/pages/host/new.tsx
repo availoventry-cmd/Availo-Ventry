@@ -47,7 +47,7 @@ export default function HostNewRequest() {
     },
   });
 
-  const branches = (branchesData?.data ?? []).filter((b: any) => b.isActive);
+  const branches = (Array.isArray(branchesData) ? branchesData : branchesData?.data ?? []).filter((b: any) => b.isActive);
 
   const onSubmit = async (data: z.infer<typeof schema>) => {
     try {

@@ -42,7 +42,7 @@ export default function PortalSettings() {
 
   const [editUserDialog, setEditUserDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
-  const [editUserForm, setEditUserForm] = useState({ name: "", email: "" });
+  const [editUserForm, setEditUserForm] = useState({ name: "", email: "", branchId: "", department: "", jobTitle: "" });
 
   useEffect(() => {
     if (org) {
@@ -120,7 +120,7 @@ export default function PortalSettings() {
 
   const openEditUser = (u: any) => {
     setEditingUser(u);
-    setEditUserForm({ name: u.name || "", email: u.email || "" });
+    setEditUserForm({ name: u.name || "", email: u.email || "", branchId: u.branchId || "", department: u.department || "", jobTitle: u.jobTitle || "" });
     setEditUserDialog(true);
   };
 
@@ -132,7 +132,7 @@ export default function PortalSettings() {
     try {
       const res = await fetch(`/api/organizations/${user!.orgId}/users/${editingUser.id}`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
-        body: JSON.stringify({ name: editUserForm.name, email: editUserForm.email }),
+        body: JSON.stringify({ name: editUserForm.name, email: editUserForm.email, branchId: editUserForm.branchId || null, department: editUserForm.department, jobTitle: editUserForm.jobTitle }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -535,8 +535,8 @@ export default function PortalSettings() {
       <Dialog open={editUserDialog} onOpenChange={setEditUserDialog}>
         <DialogContent className="rounded-2xl max-w-md">
           <DialogHeader>
-            <DialogTitle className="font-display">Edit User</DialogTitle>
-            <DialogDescription>Update user name and email address.</DialogDescription>
+            <DialogTitle className="font-display">Edit {editingUser?.name || "User"}</DialogTitle>
+            <DialogDescription>Update user details and branch assignment.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
@@ -546,6 +546,29 @@ export default function PortalSettings() {
             <div className="space-y-1.5">
               <Label>Email</Label>
               <Input type="email" className="rounded-xl" value={editUserForm.email} onChange={e => setEditUserForm(f => ({ ...f, email: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Assigned Branch</Label>
+              <Select value={editUserForm.branchId} onValueChange={v => setEditUserForm(f => ({ ...f, branchId: v === "__none__" ? "" : v }))}>
+                <SelectTrigger className="rounded-xl"><SelectValue placeholder="All branches" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">All branches (no specific branch)</SelectItem>
+                  {branches.filter((b: any) => b.isActive !== false).map((b: any) => (
+                    <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-slate-400">Determines which branch's visit requests this user can see</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Department</Label>
+                <Input className="rounded-xl" value={editUserForm.department} onChange={e => setEditUserForm(f => ({ ...f, department: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Job Title</Label>
+                <Input className="rounded-xl" value={editUserForm.jobTitle} onChange={e => setEditUserForm(f => ({ ...f, jobTitle: e.target.value }))} />
+              </div>
             </div>
             {editingUser && (
               <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-500">

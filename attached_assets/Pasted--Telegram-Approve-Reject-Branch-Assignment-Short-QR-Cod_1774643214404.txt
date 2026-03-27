@@ -1,0 +1,358 @@
+# Telegram Approve/Reject, Branch Assignment, Short QR Codes & Email Fixes
+
+## IMPORTANT CONSTRAINTS
+- Do NOT break existing flows.
+- Keep all existing Telegram commands working.
+- Keep backward compatibility with existing QR codes in the database.
+
+---
+
+## FIX 1: Telegram Approve/Reject Commands
+
+The walk-in notification says "Reply /approve_xxx or /reject_xxx" but the webhook handler in `artifacts/api-server/src/routes/telegram.ts` never processes these commands.
+
+### Fix
+Add handling for `/approve_` and `/reject_` commands in the webhook POST handler. Find the section after the `/unlink` command handler and before the closing of the webhook function. Add:
+
+```typescript
+// /approve_REQUESTID
+if (text.startsWith("/approve_")) {
+  const shortId = text.split("_")[1]?.trim();
+  if (!shortId) {
+    await TG.sendTelegramMessage(chatId, "❌ Invalid command format.");
+    return;
+  }
+
+  // Find the linked user
+  const subs = await db.select().from(telegramSubscriptionsTable)
+    .where(and(eq(telegramSubscriptionsTable.chatId, chatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+    .limit(1);
+  if (!subs[0]) {
+    await TG.sendTelegramMessage(chatId, "❌ Your account is not linked. Send /link CODE first.");
+    return;
+  }
+
+  const userId = subs[0].userId;
+  const user = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+  if (!user) {
+    await TG.sendTelegramMessage(chatId, "❌ User account not found.");
+    return;
+  }
+
+  // Find the visit request by partial ID match
+  const allRequests = await db.select().from(visitRequestsTable)
+    .where(user.orgId ? eq(visitRequestsTable.orgId, user.orgId) : undefined as any);
+  const request = allRequests.find(r => r.id.startsWith(shortId) && r.status === "pending");
+
+  if (!request) {
+    await TG.sendTelegramMessage(chatId, "❌ Visit request not found or already processed.");
+    return;
+  }
+
+  // Import needed functions
+  const { generateQrCode, generateToken } = await import("../lib/id.js");
+  const { addHours } = await import("../lib/dateUtils.js");
+
+  const qrCode = request.qrCode || generateQrCode();
+  const trackingToken = request.trackingToken || generateToken(16);
+
+  await db.update(visitRequestsTable).set({
+    status: "approved",
+    approvedById: userId,
+    approvedAt: new Date(),
+    approvalMethod: "telegram",
+    qrCode,
+    qrExpiresAt: addHours(new Date(), 24),
+    trackingToken,
+  }).where(eq(visitRequestsTable.id, request.id));
+
+  // Get visitor name
+  const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+  await TG.sendTelegramMessage(chatId,
+    `<b>✅ Visit Approved!</b>\n\n` +
+    `👤 ${visitor?.fullName || "Unknown"}\n` +
+    `📋 ${request.purpose}\n` +
+    `📅 ${request.scheduledDate}\n\n` +
+    `The visitor will receive their QR pass.`
+  );
+
+  // Send approval email to visitor if they have an email
+  if (visitor?.email) {
+    try {
+      const { sendEmail, buildVisitApprovedEmail, getBaseUrl } = await import("../lib/email.js");
+      const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
+      // Use a default base URL since we don't have req in webhook context
+      const baseUrl = process.env.APP_URL || "https://your-app.replit.dev";
+      const passLink = `${baseUrl}/public/pass/${trackingToken}`;
+      await sendEmail({
+        to: visitor.email,
+        subject: `Your visit to ${org?.name || "the organization"} has been approved`,
+        html: buildVisitApprovedEmail({
+          visitorName: visitor.fullName,
+          organizationName: org?.name || "the organization",
+          scheduledDate: request.scheduledDate,
+          scheduledTime: request.scheduledTimeFrom || undefined,
+          passLink,
+          qrCode,
+        }),
+      });
+    } catch (e) { console.error("Email after Telegram approve:", e); }
+  }
+  return;
+}
+
+// /reject_REQUESTID
+if (text.startsWith("/reject_")) {
+  const shortId = text.split("_")[1]?.trim();
+  if (!shortId) {
+    await TG.sendTelegramMessage(chatId, "❌ Invalid command format.");
+    return;
+  }
+
+  const subs = await db.select().from(telegramSubscriptionsTable)
+    .where(and(eq(telegramSubscriptionsTable.chatId, chatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+    .limit(1);
+  if (!subs[0]) {
+    await TG.sendTelegramMessage(chatId, "❌ Your account is not linked.");
+    return;
+  }
+
+  const userId = subs[0].userId;
+  const user = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+  if (!user) {
+    await TG.sendTelegramMessage(chatId, "❌ User account not found.");
+    return;
+  }
+
+  const allRequests = await db.select().from(visitRequestsTable)
+    .where(user.orgId ? eq(visitRequestsTable.orgId, user.orgId) : undefined as any);
+  const request = allRequests.find(r => r.id.startsWith(shortId) && r.status === "pending");
+
+  if (!request) {
+    await TG.sendTelegramMessage(chatId, "❌ Visit request not found or already processed.");
+    return;
+  }
+
+  await db.update(visitRequestsTable).set({
+    status: "rejected",
+    approvedById: userId,
+    approvedAt: new Date(),
+    rejectionReason: "Rejected via Telegram",
+  }).where(eq(visitRequestsTable.id, request.id));
+
+  const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+  await TG.sendTelegramMessage(chatId,
+    `<b>❌ Visit Rejected</b>\n\n` +
+    `👤 ${visitor?.fullName || "Unknown"}\n` +
+    `📋 ${request.purpose}`
+  );
+  return;
+}
+```
+
+Also add an `APP_URL` secret in Replit Secrets tab with the value of your app's public URL (e.g. `https://53bedf4a-def0-45f8-951d-7a95a26e177c-00-2etkvqvam8t0k.spock.replit.dev`). This is needed for the approval email link since the Telegram webhook doesn't have access to the request URL.
+
+---
+
+## FIX 2: Trigger Walk-in Notification on Public Booking
+
+In `artifacts/api-server/src/routes/publicRoutes.ts`, after inserting the visit request (around line 120), add a Telegram notification for new walk-in requests:
+
+```typescript
+import { notifyWalkIn } from "../lib/notifyTelegram.js";
+
+// After the db.insert(visitRequestsTable)... and before res.status(201).json(...)
+// Fire-and-forget walk-in notification
+const [branch] = branchId ? await db.select().from(branchesTable).where(eq(branchesTable.id, branchId)).limit(1) : [null];
+notifyWalkIn({
+  visitorName,
+  purpose,
+  branchName: branch?.name || "Unknown",
+  orgName: org.name,
+  requestId,
+  orgId: org.id,
+}).catch(console.error);
+```
+
+Import branchesTable at the top if not already imported.
+
+---
+
+## FIX 3: Shorten QR Pass Code
+
+In `artifacts/api-server/src/lib/id.ts`, change the `generateQrCode` function to produce shorter, more readable codes:
+
+```typescript
+export function generateQrCode(): string {
+  // Generate 6-character uppercase alphanumeric code (e.g., "A7K2M9")
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // excluded I,O,0,1 to avoid confusion
+  let code = "";
+  const bytes = randomBytes(6);
+  for (let i = 0; i < 6; i++) {
+    code += chars[bytes[i] % chars.length];
+  }
+  return code;
+}
+```
+
+This creates codes like `A7K2M9` instead of `dG9rZW4tZGF0YS1oZXJlLXRlc3Q`. Much easier to read and type.
+
+Also update `generateToken` to produce shorter tracking tokens:
+
+```typescript
+export function generateToken(length = 8): string {
+  return randomBytes(length).toString("hex");
+}
+```
+
+NOTE: Existing QR codes in the database will still work — the scan-qr endpoint matches by exact QR code value, so old long codes and new short codes both work.
+
+---
+
+## FIX 4: Branch Assignment — Allow Org Admin to Edit User's Branch
+
+In `artifacts/ventry/src/pages/portal/settings.tsx`, in the Users tab:
+
+1. Add an "Edit" option to the user dropdown menu (alongside Deactivate/Reactivate)
+2. When clicking "Edit", open a dialog that lets the org admin change:
+   - User's branch assignment (dropdown of active branches)
+   - User's department
+   - User's job title
+
+Add state:
+```typescript
+const [editUserDialog, setEditUserDialog] = useState<any>(null);
+const [editUserForm, setEditUserForm] = useState({ branchId: "", department: "", jobTitle: "" });
+```
+
+Add handler:
+```typescript
+const openEditUser = (u: any) => {
+  setEditUserDialog(u);
+  setEditUserForm({
+    branchId: u.branchId || "",
+    department: u.department || "",
+    jobTitle: u.jobTitle || "",
+  });
+};
+
+const handleSaveUser = async () => {
+  if (!editUserDialog) return;
+  try {
+    await fetch(`/api/organizations/${user!.orgId}/users/${editUserDialog.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(editUserForm),
+    });
+    toast({ title: "User Updated" });
+    setEditUserDialog(null);
+    queryClient.invalidateQueries({ queryKey: [`/api/organizations/${user?.orgId}/users`] });
+  } catch {
+    toast({ title: "Failed", variant: "destructive" });
+  }
+};
+```
+
+Add "Edit" to the dropdown menu for each user:
+```tsx
+<DropdownMenuItem className="cursor-pointer" onClick={() => openEditUser(u)}>
+  Edit Details
+</DropdownMenuItem>
+```
+
+Add edit dialog:
+```tsx
+<Dialog open={!!editUserDialog} onOpenChange={() => setEditUserDialog(null)}>
+  <DialogContent className="rounded-2xl max-w-md">
+    <DialogHeader>
+      <DialogTitle className="font-display">Edit {editUserDialog?.name}</DialogTitle>
+    </DialogHeader>
+    <div className="space-y-4 py-2">
+      <div className="space-y-1.5">
+        <Label>Assigned Branch</Label>
+        <Select value={editUserForm.branchId} onValueChange={v => setEditUserForm(f => ({ ...f, branchId: v }))}>
+          <SelectTrigger className="rounded-xl"><SelectValue placeholder="All branches" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All branches (no specific branch)</SelectItem>
+            {branches.filter((b: any) => b.isActive !== false).map((b: any) => (
+              <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-slate-400">Determines which branch's visit requests this user can see</p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label>Department</Label>
+          <Input className="rounded-xl" value={editUserForm.department} onChange={e => setEditUserForm(f => ({ ...f, department: e.target.value }))} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Job Title</Label>
+          <Input className="rounded-xl" value={editUserForm.jobTitle} onChange={e => setEditUserForm(f => ({ ...f, jobTitle: e.target.value }))} />
+        </div>
+      </div>
+    </div>
+    <DialogFooter>
+      <Button variant="outline" className="rounded-xl" onClick={() => setEditUserDialog(null)}>Cancel</Button>
+      <Button className="rounded-xl" onClick={handleSaveUser}>Save Changes</Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+```
+
+---
+
+## FIX 5: Improve Email Deliverability (Avoid Junk)
+
+In `artifacts/api-server/src/lib/email.ts`, update the `sendEmail` function to add headers that help avoid spam filters:
+
+```typescript
+await transporter.sendMail({
+  from: `"Availo Ventry" <${process.env.SMTP_EMAIL}>`,
+  to,
+  subject,
+  html,
+  headers: {
+    "X-Priority": "1",
+    "X-Mailer": "Availo Ventry Platform",
+    "List-Unsubscribe": `<mailto:${process.env.SMTP_EMAIL}?subject=unsubscribe>`,
+  },
+  // Add plain text alternative — emails with both HTML and text are less likely to be marked as spam
+  text: html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim(),
+});
+```
+
+This adds:
+- `List-Unsubscribe` header (required by many email providers)
+- Plain text alternative (emails without plain text are flagged as spam)
+- Priority header
+
+---
+
+## Summary of Files to Modify
+
+- `artifacts/api-server/src/routes/telegram.ts` — Add /approve_ and /reject_ command handlers
+- `artifacts/api-server/src/routes/publicRoutes.ts` — Trigger walk-in notification to Telegram
+- `artifacts/api-server/src/lib/id.ts` — Shorten QR code to 6 chars, tracking token to 8
+- `artifacts/api-server/src/lib/email.ts` — Add deliverability headers + plain text
+- `artifacts/ventry/src/pages/portal/settings.tsx` — Add edit user dialog with branch assignment
+
+## After Applying
+
+### Set up Telegram Bot:
+1. Add `APP_URL` secret in Replit Secrets with your app URL
+2. Log in as super admin → go to any page → open Shell
+3. Run: `curl -X POST "https://api.telegram.org/bot8726287953:AAGRvy7Q2mS9Uk2oqxOpSxrO4qKi_AC0h2s/setWebhook?url=YOUR_APP_URL/api/telegram/webhook"`
+   Replace YOUR_APP_URL with your actual app URL
+4. Log in as org admin → go to Telegram Bot settings → generate a link code → message the bot with /link CODE
+5. Now when a visitor submits a walk-in request, managers get a Telegram notification with /approve and /reject commands
+
+### Test:
+1. Submit a walk-in visit from public booking → managers should get Telegram notification
+2. Reply /approve_xxx in Telegram → request should be approved + visitor gets email
+3. Reply /reject_xxx → request should be rejected
+4. Go to Settings → Users → Edit a user → change their branch → they should only see that branch's requests
+5. New QR codes should be 6 characters like "A7K2M9"

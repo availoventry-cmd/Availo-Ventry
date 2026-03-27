@@ -25,6 +25,12 @@ export async function sendEmail({ to, subject, html }: SendEmailOptions): Promis
       to,
       subject,
       html,
+      text: html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim(),
+      headers: {
+        "X-Priority": "1",
+        "X-Mailer": "Availo Ventry Platform",
+        "List-Unsubscribe": `<mailto:${process.env.SMTP_EMAIL}?subject=unsubscribe>`,
+      },
     });
     console.log(`Email sent successfully to ${to}`);
     return true;

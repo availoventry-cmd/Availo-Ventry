@@ -3,6 +3,7 @@ import { db, organizationsTable, branchesTable, visitRequestsTable, visitorsTabl
 import { eq, and } from "drizzle-orm";
 import { generateId, generateQrCode, generateToken } from "../lib/id.js";
 import { addHours } from "../lib/dateUtils.js";
+import { notifyWalkIn } from "../lib/notifyTelegram.js";
 
 const router = Router();
 
@@ -118,6 +119,18 @@ router.post("/orgs/:slug/book", async (req, res) => {
       trackingToken,
       notes,
     });
+
+    if (!autoApprove) {
+      const [branch] = branchId ? await db.select().from(branchesTable).where(eq(branchesTable.id, branchId)).limit(1) : [null];
+      notifyWalkIn({
+        visitorName,
+        purpose,
+        branchName: branch?.name || "Unknown",
+        orgName: org.name,
+        requestId,
+        orgId: org.id,
+      }).catch(console.error);
+    }
 
     const message = autoApprove
       ? "Your visit request has been automatically approved! Check your QR pass via the link sent."

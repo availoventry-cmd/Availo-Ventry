@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, telegramSubscriptionsTable, visitRequestsTable, visitorsTable, usersTable, branchesTable, organizationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole, loadPermissions } from "../lib/auth.js";
 import { generateId } from "../lib/id.js";
 import * as TG from "../lib/telegram.js";
 
@@ -236,6 +236,156 @@ router.post("/webhook", async (req, res) => {
 
     await TG.sendTelegramMessage(chatId,
       "✅ Your account has been unlinked. You will no longer receive notifications.\n\nSend /link CODE to reconnect."
+    );
+    return;
+  }
+
+  // /approve_REQUESTID
+  if (text.startsWith("/approve_")) {
+    const shortId = text.split("_")[1]?.trim();
+    if (!shortId) {
+      await TG.sendTelegramMessage(chatId, "❌ Invalid command format.");
+      return;
+    }
+
+    const subs = await db.select().from(telegramSubscriptionsTable)
+      .where(and(eq(telegramSubscriptionsTable.chatId, chatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+      .limit(1);
+    if (!subs[0]) {
+      await TG.sendTelegramMessage(chatId, "❌ Your account is not linked. Send /link CODE first.");
+      return;
+    }
+
+    const userId = subs[0].userId;
+    const user = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+    if (!user) {
+      await TG.sendTelegramMessage(chatId, "❌ User account not found.");
+      return;
+    }
+
+    const userPerms = await loadPermissions(user.role, user.roleId);
+    if (!userPerms.includes("visit_requests.approve")) {
+      await TG.sendTelegramMessage(chatId, "❌ You don't have permission to approve visit requests.");
+      return;
+    }
+
+    const allRequests = await db.select().from(visitRequestsTable)
+      .where(user.orgId ? eq(visitRequestsTable.orgId, user.orgId) : undefined as any);
+    const request = allRequests.find(r => {
+      if (!r.id.startsWith(shortId) || r.status !== "pending") return false;
+      if (user.branchId && r.branchId !== user.branchId) return false;
+      return true;
+    });
+
+    if (!request) {
+      await TG.sendTelegramMessage(chatId, "❌ Visit request not found or already processed.");
+      return;
+    }
+
+    const { generateQrCode, generateToken } = await import("../lib/id.js");
+    const { addHours } = await import("../lib/dateUtils.js");
+
+    const qrCode = request.qrCode || generateQrCode();
+    const trackingToken = request.trackingToken || generateToken(16);
+
+    await db.update(visitRequestsTable).set({
+      status: "approved",
+      approvedById: userId,
+      approvedAt: new Date(),
+      approvalMethod: "telegram",
+      qrCode,
+      qrExpiresAt: addHours(new Date(), 24),
+      trackingToken,
+    }).where(eq(visitRequestsTable.id, request.id));
+
+    const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+    await TG.sendTelegramMessage(chatId,
+      `<b>✅ Visit Approved!</b>\n\n` +
+      `👤 ${visitor?.fullName || "Unknown"}\n` +
+      `📋 ${request.purpose}\n` +
+      `📅 ${request.scheduledDate}\n\n` +
+      `The visitor will receive their QR pass.`
+    );
+
+    if (visitor?.email) {
+      try {
+        const { sendEmail, buildVisitApprovedEmail } = await import("../lib/email.js");
+        const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
+        const baseUrl = process.env.APP_URL || process.env.APP_BASE_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "");
+        const passLink = `${baseUrl}/public/pass/${trackingToken}`;
+        await sendEmail({
+          to: visitor.email,
+          subject: `Your visit to ${org?.name || "the organization"} has been approved`,
+          html: buildVisitApprovedEmail({
+            visitorName: visitor.fullName,
+            organizationName: org?.name || "the organization",
+            scheduledDate: request.scheduledDate,
+            scheduledTime: request.scheduledTimeFrom || undefined,
+            passLink,
+            qrCode,
+          }),
+        });
+      } catch (e) { console.error("Email after Telegram approve:", e); }
+    }
+    return;
+  }
+
+  // /reject_REQUESTID
+  if (text.startsWith("/reject_")) {
+    const shortId = text.split("_")[1]?.trim();
+    if (!shortId) {
+      await TG.sendTelegramMessage(chatId, "❌ Invalid command format.");
+      return;
+    }
+
+    const subs = await db.select().from(telegramSubscriptionsTable)
+      .where(and(eq(telegramSubscriptionsTable.chatId, chatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+      .limit(1);
+    if (!subs[0]) {
+      await TG.sendTelegramMessage(chatId, "❌ Your account is not linked.");
+      return;
+    }
+
+    const userId = subs[0].userId;
+    const user = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+    if (!user) {
+      await TG.sendTelegramMessage(chatId, "❌ User account not found.");
+      return;
+    }
+
+    const userPerms = await loadPermissions(user.role, user.roleId);
+    if (!userPerms.includes("visit_requests.approve")) {
+      await TG.sendTelegramMessage(chatId, "❌ You don't have permission to reject visit requests.");
+      return;
+    }
+
+    const allRequests = await db.select().from(visitRequestsTable)
+      .where(user.orgId ? eq(visitRequestsTable.orgId, user.orgId) : undefined as any);
+    const request = allRequests.find(r => {
+      if (!r.id.startsWith(shortId) || r.status !== "pending") return false;
+      if (user.branchId && r.branchId !== user.branchId) return false;
+      return true;
+    });
+
+    if (!request) {
+      await TG.sendTelegramMessage(chatId, "❌ Visit request not found or already processed.");
+      return;
+    }
+
+    await db.update(visitRequestsTable).set({
+      status: "rejected",
+      approvedById: userId,
+      approvedAt: new Date(),
+      rejectionReason: "Rejected via Telegram",
+    }).where(eq(visitRequestsTable.id, request.id));
+
+    const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+    await TG.sendTelegramMessage(chatId,
+      `<b>❌ Visit Rejected</b>\n\n` +
+      `👤 ${visitor?.fullName || "Unknown"}\n` +
+      `📋 ${request.purpose}`
     );
     return;
   }

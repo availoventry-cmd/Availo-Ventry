@@ -12,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle2, Building2, ShieldCheck, Loader2 } from "lucide-react";
 import { useState } from "react";
+import { useLang } from "@/hooks/use-language";
+import { LangToggle } from "@/components/lang-toggle";
 
 const bookingSchema = z.object({
   visitorName: z.string().min(2, "Full name is required"),
@@ -30,6 +32,7 @@ type BookingFormData = z.infer<typeof bookingSchema>;
 export default function PublicBooking() {
   const { slug } = useParams<{ slug: string }>();
   const { toast } = useToast();
+  const { t, dir, lang } = useLang();
   const [isSuccess, setIsSuccess] = useState(false);
   const [trackingToken, setTrackingToken] = useState<string | null>(null);
 
@@ -88,12 +91,12 @@ export default function PublicBooking() {
       if (data.success) {
         setChallengeId(data.challengeId);
         setOtpSent(true);
-        toast({ title: "Code Sent", description: `Verification code sent via ${otpChannel.toUpperCase()}.` });
+        toast({ title: t("Code Sent", "تم إرسال الرمز"), description: t(`Verification code sent via ${otpChannel.toUpperCase()}.`, `تم إرسال رمز التحقق عبر ${otpChannel.toUpperCase()}.`) });
       } else {
-        toast({ title: "Failed", description: data.error || "Could not send code. Try again.", variant: "destructive" });
+        toast({ title: t("Failed", "فشل"), description: data.error || t("Could not send code. Try again.", "تعذر إرسال الرمز. حاول مرة أخرى."), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Failed to send code", variant: "destructive" });
+      toast({ title: t("Failed to send code", "فشل إرسال الرمز"), variant: "destructive" });
     } finally {
       setSendingOtp(false);
     }
@@ -110,7 +113,7 @@ export default function PublicBooking() {
       });
       const verifyData = await verifyRes.json();
       if (!verifyData.verified) {
-        toast({ title: "Incorrect Code", description: verifyData.message || "Please try again.", variant: "destructive" });
+        toast({ title: t("Incorrect Code", "رمز غير صحيح"), description: verifyData.message || t("Please try again.", "يرجى المحاولة مرة أخرى."), variant: "destructive" });
         return;
       }
 
@@ -119,7 +122,7 @@ export default function PublicBooking() {
       setTrackingToken((result as any)?.trackingToken || null);
       setIsSuccess(true);
     } catch {
-      toast({ title: "Submission Failed", description: "Please try again later.", variant: "destructive" });
+      toast({ title: t("Submission Failed", "فشل الإرسال"), description: t("Please try again later.", "يرجى المحاولة لاحقاً."), variant: "destructive" });
     } finally {
       setVerifying(false);
       setSubmitting(false);
@@ -142,32 +145,35 @@ export default function PublicBooking() {
       });
       const data = await res.json();
       if (data.challengeId) setChallengeId(data.challengeId);
-      toast({ title: "Code Resent" });
+      toast({ title: t("Code Resent", "تم إعادة إرسال الرمز") });
     } catch {
-      toast({ title: "Failed to resend", variant: "destructive" });
+      toast({ title: t("Failed to resend", "فشل إعادة الإرسال"), variant: "destructive" });
     } finally {
       setSendingOtp(false);
     }
   };
 
   if (orgLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50">Loading...</div>;
-  if (!org) return <div className="min-h-screen flex items-center justify-center bg-slate-50">Organization not found</div>;
+  if (!org) return <div className="min-h-screen flex items-center justify-center bg-slate-50">{t("Organization not found", "لم يتم العثور على المنظمة")}</div>;
+
+  const orgName = lang === "ar" && (org as any).nameAr ? (org as any).nameAr : org.name;
 
   if (otpStep && !isSuccess) {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 relative" dir={dir}>
+        <LangToggle className="absolute top-4 right-4" />
         <Card className="w-full max-w-md p-8 border-border/50 shadow-xl rounded-3xl animate-in-slide">
           <div className="text-center mb-6">
             <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <ShieldCheck className="w-8 h-8" />
             </div>
-            <h2 className="text-2xl font-display font-bold text-foreground">Verify Your Identity</h2>
-            <p className="text-muted-foreground mt-2">We need to verify your identity before submitting the request.</p>
+            <h2 className="text-2xl font-display font-bold text-foreground">{t("Verify Your Identity", "تحقق من هويتك")}</h2>
+            <p className="text-muted-foreground mt-2">{t("We need to verify your identity before submitting the request.", "نحتاج للتحقق من هويتك قبل إرسال الطلب.")}</p>
           </div>
 
           {!otpSent ? (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground text-center">Choose how to receive your verification code</p>
+              <p className="text-sm text-muted-foreground text-center">{t("Choose how to receive your verification code", "اختر طريقة استلام رمز التحقق")}</p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setOtpChannel("sms")}
                   className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "sms" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
@@ -179,20 +185,20 @@ export default function PublicBooking() {
                 </button>
                 <button type="button" onClick={() => setOtpChannel("email")}
                   className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "email" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
-                  Email
+                  {t("Email", "بريد")}
                 </button>
               </div>
               <p className="text-xs text-muted-foreground text-center">
-                Code will be sent to {otpChannel === "email" ? otpEmail : otpPhone}
+                {t("Code will be sent to", "سيتم إرسال الرمز إلى")} {otpChannel === "email" ? otpEmail : otpPhone}
               </p>
               <Button className="w-full h-12 rounded-xl" onClick={handleSendOtp} disabled={sendingOtp}>
-                {sendingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send Code"}
+                {sendingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : t("Send Code", "إرسال الرمز")}
               </Button>
             </div>
           ) : (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground text-center">
-                Enter the code sent via {otpChannel.toUpperCase()}
+                {t(`Enter the code sent via ${otpChannel.toUpperCase()}`, `أدخل الرمز المرسل عبر ${otpChannel.toUpperCase()}`)}
               </p>
               <Input
                 className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50 border-slate-200"
@@ -208,17 +214,17 @@ export default function PublicBooking() {
                 onClick={handleVerifyAndSubmit}
               >
                 {verifying || submitting ? (
-                  <><Loader2 className="w-5 h-5 animate-spin mr-2" /> {submitting ? "Submitting..." : "Verifying..."}</>
+                  <><Loader2 className="w-5 h-5 animate-spin mr-2" /> {submitting ? t("Submitting...", "جارٍ الإرسال...") : t("Verifying...", "جارٍ التحقق...")}</>
                 ) : (
-                  "Verify & Submit Request"
+                  t("Verify & Submit Request", "تحقق وأرسل الطلب")
                 )}
               </Button>
               <div className="flex justify-between text-xs">
                 <button type="button" className="text-primary hover:underline" onClick={() => { setOtpSent(false); setOtpCode(""); }}>
-                  Change method
+                  {t("Change method", "تغيير الطريقة")}
                 </button>
                 <button type="button" className="text-primary hover:underline" onClick={handleResendOtp} disabled={sendingOtp}>
-                  {sendingOtp ? "Sending..." : "Resend code"}
+                  {sendingOtp ? t("Sending...", "جارٍ الإرسال...") : t("Resend code", "إعادة إرسال الرمز")}
                 </button>
               </div>
             </div>
@@ -231,7 +237,7 @@ export default function PublicBooking() {
               setOtpCode("");
               setChallengeId("");
             }}>
-              Back to form
+              {t("Back to form", "العودة للنموذج")}
             </button>
           </div>
         </Card>
@@ -241,26 +247,30 @@ export default function PublicBooking() {
 
   if (isSuccess) {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 relative" dir={dir}>
+        <LangToggle className="absolute top-4 right-4" />
         <Card className="w-full max-w-md p-8 text-center border-border/50 shadow-xl rounded-3xl animate-in-slide">
           <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
             <CheckCircle2 className="w-10 h-10" />
           </div>
-          <h2 className="text-3xl font-display font-bold text-foreground mb-3">Request Submitted</h2>
+          <h2 className="text-3xl font-display font-bold text-foreground mb-3">{t("Request Submitted", "تم إرسال الطلب")}</h2>
           <p className="text-muted-foreground text-lg mb-6">
-            Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an email with your entry pass and QR code once approved.
+            {t(
+              `Your visit request for ${orgName} has been sent for approval. You will receive an email with your entry pass and QR code once approved.`,
+              `تم إرسال طلب زيارتك لـ ${orgName} للموافقة. ستتلقى بريداً إلكترونياً يحتوي على تصريح الدخول ورمز QR بمجرد الموافقة.`
+            )}
           </p>
           {trackingToken && (
             <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 mb-6 text-left">
-              <p className="text-sm font-semibold text-blue-900 mb-2">Track your request:</p>
+              <p className="text-sm font-semibold text-blue-900 mb-2">{t("Track your request:", "تتبع طلبك:")}</p>
               <a href={`/public/pass/${trackingToken}`} className="text-sm text-blue-600 hover:underline break-all">
                 {window.location.origin}/public/pass/{trackingToken}
               </a>
-              <p className="text-xs text-blue-500 mt-2">Bookmark this link to check your request status anytime.</p>
+              <p className="text-xs text-blue-500 mt-2">{t("Bookmark this link to check your request status anytime.", "احفظ هذا الرابط لمتابعة حالة طلبك في أي وقت.")}</p>
             </div>
           )}
           <Button onClick={() => window.location.reload()} variant="outline" className="h-12 px-8 rounded-xl font-semibold hover-elevate">
-            Submit Another Request
+            {t("Submit Another Request", "إرسال طلب آخر")}
           </Button>
         </Card>
       </div>
@@ -268,13 +278,14 @@ export default function PublicBooking() {
   }
 
   return (
-    <div className="min-h-screen w-full bg-slate-50 py-12 px-4 flex flex-col items-center">
+    <div className="min-h-screen w-full bg-slate-50 py-12 px-4 flex flex-col items-center relative" dir={dir}>
+      <LangToggle className="absolute top-4 right-4" />
       <div className="w-full max-w-2xl mb-8 text-center animate-in-fade">
         <div className="w-16 h-16 bg-white border border-slate-200 shadow-sm rounded-2xl flex items-center justify-center mx-auto mb-4 overflow-hidden">
           {org.logo ? <img src={org.logo} alt="Logo" className="w-full h-full object-cover" /> : <Building2 className="w-8 h-8 text-primary" />}
         </div>
-        <h1 className="text-3xl sm:text-4xl font-display font-bold text-foreground tracking-tight">{org.name}</h1>
-        <p className="text-muted-foreground mt-2 text-lg">Visitor Registration Form</p>
+        <h1 className="text-3xl sm:text-4xl font-display font-bold text-foreground tracking-tight">{orgName}</h1>
+        <p className="text-muted-foreground mt-2 text-lg">{t("Visitor Registration Form", "نموذج تسجيل الزوار")}</p>
       </div>
 
       <Card className="w-full max-w-2xl border-border/50 shadow-xl rounded-3xl overflow-hidden animate-in-slide bg-white">
@@ -285,15 +296,15 @@ export default function PublicBooking() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <FormField control={form.control} name="visitorName" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Full Name</FormLabel>
-                    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="John Doe" {...field} /></FormControl>
+                    <FormLabel className="font-semibold text-slate-700">{t("Full Name", "الاسم الكامل")}</FormLabel>
+                    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder={t("John Doe", "محمد أحمد")} {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
 
                 <FormField control={form.control} name="phone" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Phone Number</FormLabel>
+                    <FormLabel className="font-semibold text-slate-700">{t("Phone Number", "رقم الجوال")}</FormLabel>
                     <FormControl>
                       <Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="+966 5X XXX XXXX" {...field} />
                     </FormControl>
@@ -303,7 +314,7 @@ export default function PublicBooking() {
 
                 <FormField control={form.control} name="email" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Email Address *</FormLabel>
+                    <FormLabel className="font-semibold text-slate-700">{t("Email Address", "البريد الإلكتروني")} *</FormLabel>
                     <FormControl>
                       <Input type="email" className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="visitor@email.com" {...field} />
                     </FormControl>
@@ -313,7 +324,7 @@ export default function PublicBooking() {
 
                 <FormField control={form.control} name="nationalId" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">National ID / Iqama (Optional)</FormLabel>
+                    <FormLabel className="font-semibold text-slate-700">{t("National ID / Iqama (Optional)", "رقم الهوية / الإقامة (اختياري)")}</FormLabel>
                     <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="10XXXXXXXX" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
@@ -321,8 +332,8 @@ export default function PublicBooking() {
 
                 <FormField control={form.control} name="companyName" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Your Company</FormLabel>
-                    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder="e.g. Saudi Aramco, STC..." {...field} /></FormControl>
+                    <FormLabel className="font-semibold text-slate-700">{t("Your Company", "الشركة")}</FormLabel>
+                    <FormControl><Input className="h-12 rounded-xl bg-slate-50 border-slate-200" placeholder={t("e.g. Saudi Aramco, STC...", "مثال: أرامكو، STC...")} {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
@@ -330,16 +341,18 @@ export default function PublicBooking() {
                 <div className="col-span-1 sm:col-span-2">
                   <FormField control={form.control} name="branchId" render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="font-semibold text-slate-700">Destination Branch</FormLabel>
+                      <FormLabel className="font-semibold text-slate-700">{t("Destination Branch", "الفرع")}</FormLabel>
                       <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
                           <SelectTrigger className="h-12 rounded-xl bg-slate-50 border-slate-200">
-                            <SelectValue placeholder="Select a branch" />
+                            <SelectValue placeholder={t("Select a branch", "اختر الفرع")} />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
                           {org.branches.map(b => (
-                            <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                            <SelectItem key={b.id} value={b.id}>
+                              {lang === "ar" && (b as any).nameAr ? (b as any).nameAr : b.name}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -351,8 +364,8 @@ export default function PublicBooking() {
                 <div className="col-span-1 sm:col-span-2">
                   <FormField control={form.control} name="purpose" render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="font-semibold text-slate-700">Purpose of Visit</FormLabel>
-                      <FormControl><Textarea className="min-h-[100px] rounded-xl bg-slate-50 border-slate-200 resize-none p-4" placeholder="Meeting with IT department regarding..." {...field} /></FormControl>
+                      <FormLabel className="font-semibold text-slate-700">{t("Purpose of Visit", "الغرض من الزيارة")}</FormLabel>
+                      <FormControl><Textarea className="min-h-[100px] rounded-xl bg-slate-50 border-slate-200 resize-none p-4" placeholder={t("Meeting with IT department regarding...", "اجتماع مع قسم تقنية المعلومات بخصوص...")} {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -360,7 +373,7 @@ export default function PublicBooking() {
 
                 <FormField control={form.control} name="scheduledDate" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Date</FormLabel>
+                    <FormLabel className="font-semibold text-slate-700">{t("Date", "التاريخ")}</FormLabel>
                     <FormControl><Input type="date" className="h-12 rounded-xl bg-slate-50 border-slate-200" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
@@ -368,7 +381,7 @@ export default function PublicBooking() {
 
                 <FormField control={form.control} name="scheduledTimeFrom" render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold text-slate-700">Expected Time</FormLabel>
+                    <FormLabel className="font-semibold text-slate-700">{t("Expected Time", "الوقت المتوقع")}</FormLabel>
                     <FormControl><Input type="time" className="h-12 rounded-xl bg-slate-50 border-slate-200" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
@@ -380,7 +393,7 @@ export default function PublicBooking() {
                   type="submit"
                   className="w-full h-14 rounded-xl text-lg font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all hover-elevate"
                 >
-                  Request Entry Pass
+                  {t("Request Entry Pass", "طلب تصريح دخول")}
                 </Button>
               </div>
             </form>

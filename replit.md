@@ -98,8 +98,9 @@ React + Vite frontend for Availo Ventry. Served at previewPath `/`.
 - Built with React, TailwindCSS (v4 via @tailwindcss/vite), shadcn/ui components, wouter router, React Query
 - Uses `@workspace/api-client-react` generated hooks to call the API server
 - Auth: session cookie via `useAuth()` hook in `src/hooks/use-auth.tsx`
-- Pages: Login, Super Admin Dashboard, Portal Dashboard (org admin/vm), Visit Requests (with detail dialog), Receptionist Console, Public Booking, Visitor Pass Viewer
-- Layout: `AppLayout` with role-aware sidebar navigation
+- Pages: Login, Super Admin Dashboard, Portal Dashboard (org admin/vm), Visit Requests (with detail dialog), Receptionist Console, Public Booking (with Arabic toggle), Visitor Pass Viewer (with Arabic toggle), Audit Logs, Reports (with PDF export via recharts), Blacklist Management, Setup Wizard (for new orgs)
+- Layout: `AppLayout` with role-aware sidebar navigation + language toggle (EN/AR)
+- Language: `LanguageProvider` context in `use-language.tsx` with persistent localStorage; `LangToggle` component for EN↔AR switching with RTL support
 - Entry at `src/main.tsx`, app routing in `src/App.tsx`
 - All API calls go to relative `/api/...` paths — platform routes these to port 8080
 
@@ -115,7 +116,7 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 - **6 user roles**: super_admin, org_admin, visitor_manager, receptionist, host_employee, external visitor
 - **Two visitor flows**: host-initiated pre-registered with QR codes, and walk-in self-service with approval queue
 - **Real-time notifications** (in-app)
-- **Bilingual support**: Arabic RTL / English LTR (planned)
+- **Bilingual support**: Arabic RTL / English LTR with persistent language toggle
 - Session-cookie auth using `express-session`; passwords hashed with SHA-256 + random salt
 - **Dynamic Role & Permission System**: database-driven granular permissions replacing hardcoded role checks
 
@@ -205,7 +206,7 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 - **Library**: `artifacts/api-server/src/lib/authentica.ts` — `sendOtp()`, `verifyOtp()`, `getBalance()`, `isConfigured()`
 - **Channels**: SMS, WhatsApp, Email — Authentica generates and delivers OTPs server-side
 - **Employee 2FA**: When org has `otpEnabled=true` and `verificationPolicy!="none"`, or user has `twoFactorEnabled=true`, login returns `requires2FA` with a `loginToken`; frontend shows channel picker → OTP entry; verified via `/api/auth/verify-login-otp`
-- **Visitor phone verification**: After public booking submission, SMS OTP sent to visitor phone; verification is optional (can skip)
+- **Visitor phone verification**: After public booking submission, SMS OTP required; verification is mandatory before request submission
 - **Challenge-based security**: `/api/verification/send-otp` returns a `challengeId`; `/api/verification/verify-otp` accepts `challengeId` to bind the OTP to the original request (prevents IDOR)
 - **Rate limiting**: Per-identity limit of 3 sends per 60s window; max 5 verify attempts per challenge
 - **Pending logins store**: `auth-pending.ts` — in-memory Map with 10-min TTL and periodic cleanup

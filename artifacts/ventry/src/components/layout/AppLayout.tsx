@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { LangToggle } from "@/components/lang-toggle";
 import { 
   SidebarProvider, 
   Sidebar, 
@@ -25,7 +26,10 @@ import {
   ShieldAlert,
   ScanLine,
   Send,
-  ShieldCheck
+  ShieldCheck,
+  History,
+  BarChart3,
+  ShieldBan
 } from "lucide-react";
 
 export function AppLayout({ children }: { children: ReactNode }) {
@@ -48,6 +52,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
         { title: "Dashboard", url: "/portal/dashboard", icon: LayoutDashboard },
         { title: "Visit Requests", url: "/portal/visit-requests", icon: CalendarCheck },
         { title: "Visitors", url: "/portal/visitors", icon: Users },
+        { title: "Audit Logs", url: "/portal/audit-logs", icon: History },
+        { title: "Reports", url: "/portal/reports", icon: BarChart3 },
+        { title: "Blacklist", url: "/portal/blacklist", icon: ShieldBan },
         { title: "Roles & Permissions", url: "/portal/roles", icon: ShieldCheck },
         { title: "Settings", url: "/portal/settings", icon: Settings },
         { title: "Telegram Bot", url: "/settings/telegram", icon: Send },
@@ -74,6 +81,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
     if (hasPermission("visitors.view")) {
       items.push({ title: "Visitors", url: "/portal/visitors", icon: Users });
+    }
+
+    if (hasPermission("audit_logs.view")) {
+      items.push({ title: "Audit Logs", url: "/portal/audit-logs", icon: History });
+    }
+
+    if (hasPermission("dashboard.view")) {
+      items.push({ title: "Reports", url: "/portal/reports", icon: BarChart3 });
+    }
+
+    if (hasPermission("blacklist.view")) {
+      items.push({ title: "Blacklist", url: "/portal/blacklist", icon: ShieldBan });
     }
 
     if (hasPermission("roles.view")) {
@@ -134,10 +153,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <span className="text-xs text-muted-foreground truncate">{user.role.replace('_', ' ')}</span>
               </div>
             </div>
-            <Button variant="outline" className="w-full justify-start gap-2 hover-elevate" onClick={logout}>
-              <LogOut className="w-4 h-4" />
-              Sign Out
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1 justify-start gap-2 hover-elevate" onClick={logout}>
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </Button>
+              <LangToggle />
+            </div>
           </SidebarFooter>
         </Sidebar>
 

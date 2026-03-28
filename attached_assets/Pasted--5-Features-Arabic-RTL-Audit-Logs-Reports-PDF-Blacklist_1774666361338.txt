@@ -1,0 +1,1039 @@
+# 5 Features: Arabic RTL, Audit Logs, Reports PDF, Blacklist, Setup Wizard
+
+## IMPORTANT CONSTRAINTS
+- Do NOT break existing flows.
+- All new pages must use the same design style: rounded-2xl cards, font-display headings, border-border/50 shadows.
+- Add all new pages to App.tsx routes and AppLayout.tsx sidebar navigation.
+- Import icons from lucide-react.
+
+---
+
+## FEATURE 1: Arabic RTL Support (Language Toggle)
+
+Add a language toggle (EN/AR) to the public booking page, pass page, and portal layout. The DB already stores `nameAr` fields for orgs and branches.
+
+### 1a. Create a language context
+
+Create `artifacts/ventry/src/hooks/use-language.tsx`:
+
+```tsx
+import { createContext, useContext, useState, ReactNode } from "react";
+
+type Lang = "en" | "ar";
+
+const LangContext = createContext<{
+  lang: Lang;
+  setLang: (l: Lang) => void;
+  t: (en: string, ar: string) => string;
+  dir: "ltr" | "rtl";
+}>({ lang: "en", setLang: () => {}, t: (en) => en, dir: "ltr" });
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const [lang, setLang] = useState<Lang>(() => {
+    return (localStorage.getItem("ventry-lang") as Lang) || "en";
+  });
+
+  const handleSetLang = (l: Lang) => {
+    setLang(l);
+    localStorage.setItem("ventry-lang", l);
+    document.documentElement.dir = l === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = l;
+  };
+
+  const t = (en: string, ar: string) => lang === "ar" ? ar : en;
+  const dir = lang === "ar" ? "rtl" : "ltr";
+
+  return (
+    <LangContext.Provider value={{ lang, setLang: handleSetLang, t, dir }}>
+      {children}
+    </LangContext.Provider>
+  );
+}
+
+export const useLang = () => useContext(LangContext);
+```
+
+### 1b. Wrap the app with LanguageProvider
+
+In `artifacts/ventry/src/App.tsx`, import `LanguageProvider` and wrap the app inside it (inside QueryClientProvider, outside WouterRouter).
+
+### 1c. Add language toggle button
+
+Create a small toggle component `artifacts/ventry/src/components/lang-toggle.tsx`:
+
+```tsx
+import { useLang } from "@/hooks/use-language";
+
+export function LangToggle({ className = "" }: { className?: string }) {
+  const { lang, setLang } = useLang();
+  return (
+    <button
+      onClick={() => setLang(lang === "en" ? "ar" : "en")}
+      className={`px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-semibold hover:bg-slate-50 transition-colors ${className}`}
+    >
+      {lang === "en" ? "عربي" : "EN"}
+    </button>
+  );
+}
+```
+
+### 1d. Add toggle to public booking page
+
+In `artifacts/ventry/src/pages/public/booking.tsx`:
+- Import `useLang` and `LangToggle`
+- Add `const { t, dir, lang } = useLang();` in the component
+- Add `<LangToggle className="absolute top-4 right-4" />` at the top of the page
+- Wrap the main container with `dir={dir}`
+- Replace key text with `t()` calls:
+  - `t("Visitor Registration Form", "نموذج تسجيل الزوار")`
+  - `t("Full Name", "الاسم الكامل")`
+  - `t("Phone Number", "رقم الجوال")`
+  - `t("Email Address", "البريد الإلكتروني")`
+  - `t("National ID / Iqama (Optional)", "رقم الهوية / الإقامة (اختياري)")`
+  - `t("Your Company", "الشركة")`
+  - `t("Destination Branch", "الفرع")`
+  - `t("Purpose of Visit", "الغرض من الزيارة")`
+  - `t("Date", "التاريخ")`
+  - `t("Expected Time", "الوقت المتوقع")`
+  - `t("Request Entry Pass", "طلب تصريح دخول")`
+  - `t("Request Submitted", "تم إرسال الطلب")`
+  - Branch names: show `lang === "ar" && b.nameAr ? b.nameAr : b.name`
+  - Org name: show `lang === "ar" && org.nameAr ? org.nameAr : org.name`
+
+### 1e. Add toggle to pass page
+
+In `artifacts/ventry/src/pages/public/pass.tsx`:
+- Same pattern: import useLang, add toggle, translate key labels
+- Show `t("Visitor Entry Pass", "تصريح دخول الزائر")`
+- Show `t("Scan this code at the reception desk", "قم بمسح الرمز في مكتب الاستقبال")`
+- Show `t("Manual Entry Code", "رمز الإدخال اليدوي")`
+- Show `t("You may also provide this code to the receptionist", "يمكنك أيضاً تقديم هذا الرمز لموظف الاستقبال")`
+- Show `t("Pending Approval", "بانتظار الموافقة")`, `t("Visit Approved", "تمت الموافقة")`, etc.
+
+### 1f. Add toggle to portal sidebar
+
+In `artifacts/ventry/src/components/layout/AppLayout.tsx`:
+- Import `LangToggle`
+- Add `<LangToggle />` next to the Sign Out button at the bottom of the sidebar
+
+---
+
+## FEATURE 2: Audit Logs Page
+
+Backend is ready at `GET /api/organizations/:orgId/audit-logs`. Create the frontend page.
+
+### 2a. Create the page
+
+Create `artifacts/ventry/src/pages/portal/audit-logs.tsx`:
+
+```tsx
+import { useState } from "react";
+import { useAuth } from "@/hooks/use-auth";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Search, History, RefreshCw, Filter } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { format } from "date-fns";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const actionColors: Record<string, string> = {
+  create: "bg-emerald-100 text-emerald-800",
+  update: "bg-blue-100 text-blue-800",
+  delete: "bg-red-100 text-red-800",
+  approve: "bg-green-100 text-green-800",
+  reject: "bg-red-100 text-red-800",
+  check_in: "bg-indigo-100 text-indigo-800",
+  check_out: "bg-slate-100 text-slate-700",
+  login: "bg-amber-100 text-amber-800",
+};
+
+export default function AuditLogs() {
+  const { user } = useAuth();
+  const [actionFilter, setActionFilter] = useState<string>("all");
+  const [entityFilter, setEntityFilter] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["/api/audit-logs", user?.orgId, actionFilter, entityFilter, dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: "100" });
+      if (actionFilter !== "all") params.set("action", actionFilter);
+      if (entityFilter !== "all") params.set("entityType", entityFilter);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      const res = await fetch(`${BASE}/api/organizations/${user?.orgId}/audit-logs?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!user?.orgId,
+  });
+
+  const logs = data?.data ?? [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-display font-bold text-foreground">Audit Logs</h1>
+          <p className="text-muted-foreground mt-1">Track all activity across your organization.</p>
+        </div>
+        <Button variant="outline" size="icon" className="rounded-xl" onClick={() => refetch()}>
+          <RefreshCw className="w-4 h-4" />
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3">
+        <Select value={actionFilter} onValueChange={setActionFilter}>
+          <SelectTrigger className="w-40 rounded-xl"><SelectValue placeholder="Action" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Actions</SelectItem>
+            <SelectItem value="create">Create</SelectItem>
+            <SelectItem value="update">Update</SelectItem>
+            <SelectItem value="delete">Delete</SelectItem>
+            <SelectItem value="approve">Approve</SelectItem>
+            <SelectItem value="reject">Reject</SelectItem>
+            <SelectItem value="check_in">Check In</SelectItem>
+            <SelectItem value="check_out">Check Out</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={entityFilter} onValueChange={setEntityFilter}>
+          <SelectTrigger className="w-44 rounded-xl"><SelectValue placeholder="Entity" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Entities</SelectItem>
+            <SelectItem value="visit_request">Visit Requests</SelectItem>
+            <SelectItem value="visitor">Visitors</SelectItem>
+            <SelectItem value="user">Users</SelectItem>
+            <SelectItem value="branch">Branches</SelectItem>
+            <SelectItem value="role">Roles</SelectItem>
+            <SelectItem value="organization">Organization</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input type="date" className="w-40 rounded-xl" value={dateFrom} onChange={e => setDateFrom(e.target.value)} placeholder="From" />
+        <Input type="date" className="w-40 rounded-xl" value={dateTo} onChange={e => setDateTo(e.target.value)} placeholder="To" />
+      </div>
+
+      <Card className="border-border/50 shadow-sm rounded-2xl overflow-hidden">
+        <Table>
+          <TableHeader className="bg-slate-50">
+            <TableRow>
+              <TableHead className="font-semibold">Time</TableHead>
+              <TableHead className="font-semibold">User</TableHead>
+              <TableHead className="font-semibold">Action</TableHead>
+              <TableHead className="font-semibold">Entity</TableHead>
+              <TableHead className="font-semibold">Details</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow><TableCell colSpan={5} className="h-32 text-center text-muted-foreground">Loading...</TableCell></TableRow>
+            ) : logs.length === 0 ? (
+              <TableRow><TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                <History className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                No audit logs found.
+              </TableCell></TableRow>
+            ) : logs.map((log: any) => (
+              <TableRow key={log.id}>
+                <TableCell className="text-sm whitespace-nowrap">
+                  {log.timestamp ? format(new Date(log.timestamp), "MMM d, HH:mm") : "—"}
+                </TableCell>
+                <TableCell className="font-medium text-sm">{log.userName || log.userId?.slice(0, 8) || "System"}</TableCell>
+                <TableCell>
+                  <Badge className={`capitalize shadow-none border text-xs ${actionColors[log.action] || "bg-slate-100 text-slate-700"}`}>
+                    {(log.action || "").replace("_", " ")}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-sm capitalize text-muted-foreground">{(log.entityType || "").replace("_", " ")}</TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-xs truncate">{log.description || "—"}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </div>
+  );
+}
+```
+
+### 2b. Register route and sidebar
+
+In `artifacts/ventry/src/App.tsx`:
+- Import: `import AuditLogs from "@/pages/portal/audit-logs";`
+- Add route after the roles route:
+```tsx
+<Route path="/portal/audit-logs">
+  {() => <ProtectedRoute component={AuditLogs} requiredPermission="audit_logs.view" />}
+</Route>
+```
+
+In `artifacts/ventry/src/components/layout/AppLayout.tsx`:
+- Import `History` from lucide-react
+- In the org_admin nav array (around line 48), add before Settings:
+```typescript
+{ title: "Audit Logs", url: "/portal/audit-logs", icon: History },
+```
+- In the dynamic nav section (around line 79), add:
+```typescript
+if (hasPermission("audit_logs.view")) {
+  items.push({ title: "Audit Logs", url: "/portal/audit-logs", icon: History });
+}
+```
+
+---
+
+## FEATURE 3: Reports Page with PDF Export
+
+Backend is ready at `GET /api/organizations/:orgId/reports/visitor-traffic`.
+
+### 3a. Create the page
+
+Create `artifacts/ventry/src/pages/portal/reports.tsx`:
+
+```tsx
+import { useState } from "react";
+import { useAuth } from "@/hooks/use-auth";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { BarChart3, Download, Users, Clock, TrendingUp, Percent } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+
+export default function Reports() {
+  const { user } = useAuth();
+  const [period, setPeriod] = useState("weekly");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["/api/reports", user?.orgId, period],
+    queryFn: async () => {
+      const res = await fetch(`${BASE}/api/organizations/${user?.orgId}/reports/visitor-traffic?period=${period}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!user?.orgId,
+  });
+
+  const handleExportPDF = () => {
+    // Create a printable report and trigger browser print (Save as PDF)
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const reportData = data?.data || [];
+    const summary = data?.summary || {};
+
+    const tableRows = reportData.map((d: any) =>
+      `<tr>
+        <td style="padding:8px;border-bottom:1px solid #e2e8f0">${d.label}</td>
+        <td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:center">${d.totalVisitors}</td>
+        <td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:center">${d.checkedIn}</td>
+        <td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:center">${d.walkIns}</td>
+        <td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:center">${d.preRegistered}</td>
+      </tr>`
+    ).join("");
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html><head><title>Visitor Traffic Report</title>
+      <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #1e293b; }
+        h1 { font-size: 24px; margin-bottom: 4px; }
+        .subtitle { color: #64748b; margin-bottom: 24px; }
+        .stats { display: flex; gap: 16px; margin-bottom: 24px; }
+        .stat-card { flex:1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; text-align: center; }
+        .stat-value { font-size: 28px; font-weight: 700; }
+        .stat-label { font-size: 12px; color: #64748b; margin-top: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+        th { background: #f1f5f9; padding: 10px 8px; text-align: left; font-weight: 600; font-size: 13px; }
+        .footer { margin-top: 32px; text-align: center; color: #94a3b8; font-size: 11px; }
+      </style>
+      </head><body>
+        <h1>Visitor Traffic Report</h1>
+        <p class="subtitle">Period: ${period} | Generated: ${new Date().toLocaleDateString()}</p>
+        <div class="stats">
+          <div class="stat-card"><div class="stat-value">${summary.totalVisitors || 0}</div><div class="stat-label">Total Visitors</div></div>
+          <div class="stat-card"><div class="stat-value">${summary.approvalRate || 0}%</div><div class="stat-label">Approval Rate</div></div>
+          <div class="stat-card"><div class="stat-value">${summary.peakHour || "—"}</div><div class="stat-label">Peak Hour</div></div>
+        </div>
+        <table>
+          <thead><tr><th>Period</th><th style="text-align:center">Total</th><th style="text-align:center">Checked In</th><th style="text-align:center">Walk-ins</th><th style="text-align:center">Pre-registered</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+        <div class="footer">Generated by Availo Ventry — Powered by T2</div>
+        <script>window.print();</script>
+      </body></html>
+    `);
+    printWindow.document.close();
+  };
+
+  const reportData = data?.data || [];
+  const summary = data?.summary || {};
+
+  // Prepare pie chart data
+  const totalWalkIns = reportData.reduce((a: number, d: any) => a + d.walkIns, 0);
+  const totalPreReg = reportData.reduce((a: number, d: any) => a + d.preRegistered, 0);
+  const pieData = [
+    { name: "Walk-in", value: totalWalkIns },
+    { name: "Pre-registered", value: totalPreReg },
+  ].filter(d => d.value > 0);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-display font-bold text-foreground">Reports</h1>
+          <p className="text-muted-foreground mt-1">Visitor traffic analytics and insights.</p>
+        </div>
+        <div className="flex gap-3">
+          <Select value={period} onValueChange={setPeriod}>
+            <SelectTrigger className="w-36 rounded-xl"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="daily">Daily</SelectItem>
+              <SelectItem value="weekly">Weekly</SelectItem>
+              <SelectItem value="monthly">Monthly</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="outline" className="gap-2 rounded-xl" onClick={handleExportPDF}>
+            <Download className="w-4 h-4" /> Export PDF
+          </Button>
+        </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        {[
+          { title: "Total Visitors", value: summary.totalVisitors || 0, icon: Users, color: "text-blue-600", bg: "bg-blue-100" },
+          { title: "Approval Rate", value: `${summary.approvalRate || 0}%`, icon: Percent, color: "text-emerald-600", bg: "bg-emerald-100" },
+          { title: "Peak Hour", value: summary.peakHour || "—", icon: Clock, color: "text-amber-600", bg: "bg-amber-100" },
+          { title: "Avg Duration", value: `${summary.avgDuration || 0}m`, icon: TrendingUp, color: "text-indigo-600", bg: "bg-indigo-100" },
+        ].map((s, i) => (
+          <Card key={i} className="border-border/50 shadow-sm rounded-2xl">
+            <CardContent className="p-5 flex items-center gap-3">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${s.bg} ${s.color}`}>
+                <s.icon className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground font-medium">{s.title}</p>
+                <p className="text-xl font-bold text-foreground">{s.value}</p>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <Card className="col-span-2 border-border/50 shadow-sm rounded-2xl">
+          <CardHeader><CardTitle className="font-display">Visitor Traffic</CardTitle></CardHeader>
+          <CardContent>
+            {isLoading ? <div className="h-[300px] flex items-center justify-center text-muted-foreground">Loading...</div> : (
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={reportData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 12 }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: "#64748B" }} />
+                    <Tooltip contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)" }} />
+                    <Bar dataKey="totalVisitors" name="Total" fill="#2563eb" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Bar dataKey="checkedIn" name="Checked In" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/50 shadow-sm rounded-2xl">
+          <CardHeader><CardTitle className="font-display">Visit Types</CardTitle></CardHeader>
+          <CardContent>
+            {pieData.length === 0 ? (
+              <div className="h-[250px] flex items-center justify-center text-muted-foreground">No data</div>
+            ) : (
+              <div className="h-[250px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" label>
+                      {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    </Pie>
+                    <Legend />
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+```
+
+### 3b. Register route and sidebar
+
+In App.tsx — import and add route:
+```tsx
+import Reports from "@/pages/portal/reports";
+
+<Route path="/portal/reports">
+  {() => <ProtectedRoute component={Reports} requiredPermission="dashboard.view" />}
+</Route>
+```
+
+In AppLayout.tsx sidebar — import `BarChart3` from lucide-react. Add to org_admin nav (before Settings):
+```typescript
+{ title: "Reports", url: "/portal/reports", icon: BarChart3 },
+```
+Add to dynamic nav:
+```typescript
+if (hasPermission("dashboard.view")) {
+  items.push({ title: "Reports", url: "/portal/reports", icon: BarChart3 });
+}
+```
+
+---
+
+## FEATURE 4: Blacklist Management Page
+
+Backend is fully ready with GET/POST/DELETE.
+
+### 4a. Create the page
+
+Create `artifacts/ventry/src/pages/portal/blacklist.tsx`:
+
+```tsx
+import { useState } from "react";
+import { useAuth } from "@/hooks/use-auth";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { Search, ShieldBan, Trash2, Plus, AlertTriangle } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+export default function BlacklistPage() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [addDialog, setAddDialog] = useState(false);
+  const [visitorId, setVisitorId] = useState("");
+  const [reason, setReason] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["/api/blacklist", user?.orgId, search],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: "100" });
+      if (search.trim()) params.set("search", search.trim());
+      const res = await fetch(`${BASE}/api/organizations/${user?.orgId}/blacklist?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!user?.orgId,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async (body: { visitorId: string; reason: string; expiresAt?: string }) => {
+      const res = await fetch(`${BASE}/api/organizations/${user?.orgId}/blacklist`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Visitor blacklisted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/blacklist"] });
+      setAddDialog(false); setVisitorId(""); setReason(""); setExpiresAt("");
+    },
+    onError: () => toast({ title: "Failed to blacklist", variant: "destructive" }),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`${BASE}/api/organizations/${user?.orgId}/blacklist/${id}`, {
+        method: "DELETE", credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Removed from blacklist" });
+      queryClient.invalidateQueries({ queryKey: ["/api/blacklist"] });
+    },
+    onError: () => toast({ title: "Failed to remove", variant: "destructive" }),
+  });
+
+  // Also fetch visitors for the add dialog dropdown
+  const { data: visitorsData } = useQuery({
+    queryKey: ["/api/visitors", user?.orgId],
+    queryFn: async () => {
+      const res = await fetch(`${BASE}/api/organizations/${user?.orgId}/visitors?limit=200`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!user?.orgId && addDialog,
+  });
+
+  const entries = data?.data ?? [];
+  const visitors = visitorsData?.data ?? [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-display font-bold text-foreground">Blacklist</h1>
+          <p className="text-muted-foreground mt-1">Manage blocked visitors for your organization.</p>
+        </div>
+        <div className="flex gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Search..." className="pl-9 w-56 rounded-xl" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <Button className="gap-2 rounded-xl" onClick={() => setAddDialog(true)}>
+            <Plus className="w-4 h-4" /> Add to Blacklist
+          </Button>
+        </div>
+      </div>
+
+      <Card className="border-border/50 shadow-sm rounded-2xl overflow-hidden">
+        <Table>
+          <TableHeader className="bg-slate-50">
+            <TableRow>
+              <TableHead className="font-semibold">Visitor</TableHead>
+              <TableHead className="font-semibold">Phone</TableHead>
+              <TableHead className="font-semibold">Reason</TableHead>
+              <TableHead className="font-semibold">Expires</TableHead>
+              <TableHead className="font-semibold">Added</TableHead>
+              <TableHead className="text-right font-semibold">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow><TableCell colSpan={6} className="h-32 text-center text-muted-foreground">Loading...</TableCell></TableRow>
+            ) : entries.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                <ShieldBan className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                No blacklisted visitors.
+              </TableCell></TableRow>
+            ) : entries.map((entry: any) => (
+              <TableRow key={entry.id}>
+                <TableCell className="font-medium">{entry.visitor?.fullName || "Unknown"}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{entry.visitor?.phone || "—"}</TableCell>
+                <TableCell className="text-sm max-w-xs truncate">{entry.reason}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {entry.expiresAt ? new Date(entry.expiresAt).toLocaleDateString() : <Badge variant="outline" className="text-xs">Permanent</Badge>}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "—"}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button variant="ghost" size="sm" className="text-red-600 hover:bg-red-50" onClick={() => removeMutation.mutate(entry.id)}>
+                    <Trash2 className="w-4 h-4 mr-1" /> Remove
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+
+      {/* Add to Blacklist Dialog */}
+      <Dialog open={addDialog} onOpenChange={setAddDialog}>
+        <DialogContent className="rounded-2xl max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-500" /> Add to Blacklist
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-sm font-semibold text-slate-700 block mb-1">Select Visitor</label>
+              <select className="w-full h-11 rounded-xl border border-slate-200 bg-slate-50 px-3"
+                value={visitorId} onChange={e => setVisitorId(e.target.value)}>
+                <option value="">Choose a visitor...</option>
+                {visitors.filter((v: any) => !v.isBlacklisted).map((v: any) => (
+                  <option key={v.id} value={v.id}>{v.fullName} — {v.phone || v.email || "No contact"}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-700 block mb-1">Reason</label>
+              <Textarea className="rounded-xl resize-none" rows={3} placeholder="Why is this visitor being blacklisted?" value={reason} onChange={e => setReason(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-700 block mb-1">Expires (optional)</label>
+              <Input type="date" className="rounded-xl" value={expiresAt} onChange={e => setExpiresAt(e.target.value)} />
+              <p className="text-xs text-muted-foreground mt-1">Leave empty for permanent ban.</p>
+            </div>
+          </div>
+          <div className="flex gap-3 justify-end">
+            <Button variant="outline" className="rounded-xl" onClick={() => setAddDialog(false)}>Cancel</Button>
+            <Button className="rounded-xl bg-red-600 hover:bg-red-700" disabled={!visitorId || !reason}
+              onClick={() => addMutation.mutate({ visitorId, reason, ...(expiresAt ? { expiresAt } : {}) })}>
+              Blacklist Visitor
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+```
+
+### 4b. Register route and sidebar
+
+In App.tsx:
+```tsx
+import BlacklistPage from "@/pages/portal/blacklist";
+
+<Route path="/portal/blacklist">
+  {() => <ProtectedRoute component={BlacklistPage} requiredPermission="blacklist.view" />}
+</Route>
+```
+
+In AppLayout.tsx — import `ShieldBan` from lucide-react. Add to org_admin nav:
+```typescript
+{ title: "Blacklist", url: "/portal/blacklist", icon: ShieldBan },
+```
+Add to dynamic nav:
+```typescript
+if (hasPermission("blacklist.view")) {
+  items.push({ title: "Blacklist", url: "/portal/blacklist", icon: ShieldBan });
+}
+```
+
+---
+
+## FEATURE 5: Setup Wizard for New Organizations
+
+When org admin first logs in and org status is `pending_setup`, redirect to a setup wizard instead of the dashboard.
+
+### 5a. Create the wizard page
+
+Create `artifacts/ventry/src/pages/portal/setup-wizard.tsx`:
+
+```tsx
+import { useState } from "react";
+import { useAuth } from "@/hooks/use-auth";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
+import { Building2, MapPin, Users, ShieldCheck, Check, ArrowRight, Plus, Trash2, Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const STEPS = [
+  { title: "Organization Info", subtitle: "Review your organization details", icon: Building2 },
+  { title: "Add Branches", subtitle: "Set up your physical locations", icon: MapPin },
+  { title: "Invite Team", subtitle: "Add team members to get started", icon: Users },
+  { title: "All Set!", subtitle: "Your organization is ready", icon: ShieldCheck },
+];
+
+export default function SetupWizard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
+  const [step, setStep] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  // Step 2: Branches
+  const [branches, setBranches] = useState([{ name: "", nameAr: "", branchCode: "", address: "" }]);
+
+  // Step 3: Team invitations
+  const [invitations, setInvitations] = useState([{ name: "", email: "", role: "visitor_manager" }]);
+
+  const addBranch = () => setBranches([...branches, { name: "", nameAr: "", branchCode: "", address: "" }]);
+  const removeBranch = (i: number) => setBranches(branches.filter((_, idx) => idx !== i));
+  const updateBranch = (i: number, field: string, value: string) => {
+    const updated = [...branches];
+    (updated[i] as any)[field] = value;
+    setBranches(updated);
+  };
+
+  const addInvitation = () => setInvitations([...invitations, { name: "", email: "", role: "visitor_manager" }]);
+  const removeInvitation = (i: number) => setInvitations(invitations.filter((_, idx) => idx !== i));
+  const updateInvitation = (i: number, field: string, value: string) => {
+    const updated = [...invitations];
+    (updated[i] as any)[field] = value;
+    setInvitations(updated);
+  };
+
+  const handleSaveBranches = async () => {
+    setLoading(true);
+    try {
+      const validBranches = branches.filter(b => b.name.trim());
+      for (const branch of validBranches) {
+        await fetch(`${BASE}/api/organizations/${user?.orgId}/branches`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(branch),
+        });
+      }
+      toast({ title: `${validBranches.length} branch(es) created` });
+      setStep(2);
+    } catch {
+      toast({ title: "Failed to create branches", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendInvitations = async () => {
+    setLoading(true);
+    try {
+      const valid = invitations.filter(inv => inv.name.trim() && inv.email.trim());
+      for (const inv of valid) {
+        await fetch(`${BASE}/api/organizations/${user?.orgId}/users`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ name: inv.name, email: inv.email, role: inv.role, method: "invitation" }),
+        });
+      }
+      toast({ title: `${valid.length} invitation(s) sent` });
+      setStep(3);
+    } catch {
+      toast({ title: "Failed to send invitations", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleComplete = async () => {
+    setLoading(true);
+    try {
+      await fetch(`${BASE}/api/organizations/${user?.orgId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ setupWizardCompleted: true }),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Setup complete! Welcome to Availo Ventry." });
+      setLocation("/portal/dashboard");
+    } catch {
+      toast({ title: "Failed to complete setup", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center py-12 px-4">
+      <div className="w-full max-w-2xl">
+        {/* Progress */}
+        <div className="flex items-center justify-center gap-2 mb-10">
+          {STEPS.map((s, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all ${
+                i < step ? "bg-emerald-500 text-white" :
+                i === step ? "bg-primary text-white shadow-lg shadow-primary/30" :
+                "bg-slate-200 text-slate-500"
+              }`}>
+                {i < step ? <Check className="w-5 h-5" /> : i + 1}
+              </div>
+              {i < STEPS.length - 1 && <div className={`w-12 h-1 rounded-full ${i < step ? "bg-emerald-500" : "bg-slate-200"}`} />}
+            </div>
+          ))}
+        </div>
+
+        <Card className="p-8 rounded-3xl shadow-xl border-border/50">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mx-auto mb-4">
+              {(() => { const Icon = STEPS[step].icon; return <Icon className="w-8 h-8" />; })()}
+            </div>
+            <h2 className="text-2xl font-display font-bold">{STEPS[step].title}</h2>
+            <p className="text-muted-foreground mt-1">{STEPS[step].subtitle}</p>
+          </div>
+
+          {/* Step 0: Org Info */}
+          {step === 0 && (
+            <div className="space-y-4">
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                <p className="text-sm text-muted-foreground">Organization Name</p>
+                <p className="font-semibold text-lg">{user?.orgName || "Your Organization"}</p>
+              </div>
+              <p className="text-sm text-muted-foreground">You can update your organization details later in Settings. Let's set up the basics first.</p>
+              <Button className="w-full h-12 rounded-xl gap-2" onClick={() => setStep(1)}>
+                Continue <ArrowRight className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
+
+          {/* Step 1: Branches */}
+          {step === 1 && (
+            <div className="space-y-4">
+              {branches.map((b, i) => (
+                <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-semibold text-slate-700">Branch {i + 1}</span>
+                    {branches.length > 1 && (
+                      <Button variant="ghost" size="sm" className="text-red-500 h-7" onClick={() => removeBranch(i)}>
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                    )}
+                  </div>
+                  <Input placeholder="Branch name (e.g. Riyadh HQ)" className="rounded-xl" value={b.name} onChange={e => updateBranch(i, "name", e.target.value)} />
+                  <Input placeholder="Branch name (Arabic)" className="rounded-xl" dir="rtl" value={b.nameAr} onChange={e => updateBranch(i, "nameAr", e.target.value)} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input placeholder="Branch code" className="rounded-xl" value={b.branchCode} onChange={e => updateBranch(i, "branchCode", e.target.value)} />
+                    <Input placeholder="Address" className="rounded-xl" value={b.address} onChange={e => updateBranch(i, "address", e.target.value)} />
+                  </div>
+                </div>
+              ))}
+              <Button variant="outline" className="w-full rounded-xl gap-2" onClick={addBranch}>
+                <Plus className="w-4 h-4" /> Add Another Branch
+              </Button>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setStep(0)}>Back</Button>
+                <Button className="flex-1 rounded-xl gap-2" onClick={handleSaveBranches} disabled={loading || !branches.some(b => b.name.trim())}>
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Save & Continue <ArrowRight className="w-4 h-4" /></>}
+                </Button>
+              </div>
+              <button className="text-sm text-muted-foreground hover:text-foreground w-full text-center" onClick={() => setStep(2)}>
+                Skip for now →
+              </button>
+            </div>
+          )}
+
+          {/* Step 2: Invite Team */}
+          {step === 2 && (
+            <div className="space-y-4">
+              {invitations.map((inv, i) => (
+                <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-semibold text-slate-700">Member {i + 1}</span>
+                    {invitations.length > 1 && (
+                      <Button variant="ghost" size="sm" className="text-red-500 h-7" onClick={() => removeInvitation(i)}>
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                    )}
+                  </div>
+                  <Input placeholder="Full name" className="rounded-xl" value={inv.name} onChange={e => updateInvitation(i, "name", e.target.value)} />
+                  <Input placeholder="Email address" type="email" className="rounded-xl" value={inv.email} onChange={e => updateInvitation(i, "email", e.target.value)} />
+                  <select className="w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                    value={inv.role} onChange={e => updateInvitation(i, "role", e.target.value)}>
+                    <option value="visitor_manager">Visitor Manager</option>
+                    <option value="receptionist">Receptionist</option>
+                    <option value="host_employee">Host Employee</option>
+                  </select>
+                </div>
+              ))}
+              <Button variant="outline" className="w-full rounded-xl gap-2" onClick={addInvitation}>
+                <Plus className="w-4 h-4" /> Add Another Member
+              </Button>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setStep(1)}>Back</Button>
+                <Button className="flex-1 rounded-xl gap-2" onClick={handleSendInvitations} disabled={loading || !invitations.some(inv => inv.name.trim() && inv.email.trim())}>
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Send Invitations <ArrowRight className="w-4 h-4" /></>}
+                </Button>
+              </div>
+              <button className="text-sm text-muted-foreground hover:text-foreground w-full text-center" onClick={() => setStep(3)}>
+                Skip for now →
+              </button>
+            </div>
+          )}
+
+          {/* Step 3: Complete */}
+          {step === 3 && (
+            <div className="space-y-6 text-center">
+              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                <Check className="w-10 h-10" />
+              </div>
+              <div>
+                <h3 className="text-xl font-display font-bold text-foreground">You're all set!</h3>
+                <p className="text-muted-foreground mt-2">Your organization is ready to receive visitors. You can always adjust settings later.</p>
+              </div>
+              <Button className="w-full h-12 rounded-xl text-base font-semibold" onClick={handleComplete} disabled={loading}>
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Go to Dashboard →"}
+              </Button>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+```
+
+### 5b. Register route
+
+In App.tsx:
+```tsx
+import SetupWizard from "@/pages/portal/setup-wizard";
+
+<Route path="/portal/setup">
+  {() => <ProtectedRoute component={SetupWizard} allowedRoles={['org_admin']} />}
+</Route>
+```
+
+### 5c. Auto-redirect to wizard when org is pending_setup
+
+In `artifacts/ventry/src/App.tsx`, in the `RootRedirect` component or wherever the user is redirected after login, check if the org status is `pending_setup` and the user is `org_admin`. If so, redirect to `/portal/setup`.
+
+In the `getRoleHome` function or wherever the initial redirect logic lives, add:
+
+```typescript
+// If org admin and org is pending_setup, go to setup wizard
+if (user.role === "org_admin" && user.orgStatus === "pending_setup") {
+  return "/portal/setup";
+}
+```
+
+Also in the login page's redirect logic (`setLocation(getRoleHome(...))`), check the same condition.
+
+Make sure the backend sends `orgStatus` in the user response. In `artifacts/api-server/src/routes/auth.ts`, in the `buildUserResponse` function, include:
+```typescript
+orgStatus: orgInfo?.status || null,
+```
+
+### 5d. The Setup Wizard page should NOT use AppLayout (no sidebar)
+
+The setup wizard should be a full-screen page without the sidebar layout. In App.tsx, make sure the SetupWizard route is OUTSIDE the ProtectedRoute that wraps with AppLayout. Or ensure the wizard renders its own layout without sidebar — the component above already does this since it renders a full min-h-screen layout.
+
+---
+
+## Summary of Files to Create
+- `artifacts/ventry/src/hooks/use-language.tsx` — Language context
+- `artifacts/ventry/src/components/lang-toggle.tsx` — Toggle button
+- `artifacts/ventry/src/pages/portal/audit-logs.tsx` — Audit logs page
+- `artifacts/ventry/src/pages/portal/reports.tsx` — Reports with PDF export
+- `artifacts/ventry/src/pages/portal/blacklist.tsx` — Blacklist management
+- `artifacts/ventry/src/pages/portal/setup-wizard.tsx` — New org setup wizard
+
+## Summary of Files to Modify
+- `artifacts/ventry/src/App.tsx` — Add LanguageProvider, 5 new routes
+- `artifacts/ventry/src/components/layout/AppLayout.tsx` — Add 4 sidebar items (Audit Logs, Reports, Blacklist, LangToggle) + icons
+- `artifacts/ventry/src/pages/public/booking.tsx` — Add Arabic translations + LangToggle
+- `artifacts/ventry/src/pages/public/pass.tsx` — Add Arabic translations + LangToggle
+- `artifacts/api-server/src/routes/auth.ts` — Add orgStatus to user response (for wizard redirect)
+
+## Execution Order
+1. Create language context + toggle component
+2. Create audit-logs.tsx, reports.tsx, blacklist.tsx, setup-wizard.tsx
+3. Update App.tsx with LanguageProvider + 5 new routes
+4. Update AppLayout.tsx with 4 new sidebar items
+5. Update booking.tsx + pass.tsx with Arabic translations
+6. Update auth.ts to send orgStatus
+7. Test all 5 features

@@ -4,6 +4,7 @@ import { useEffect, Component, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
+import { LanguageProvider } from "@/hooks/use-language";
 import { AppLayout } from "@/components/layout/AppLayout";
 import NotFound from "@/pages/not-found";
 
@@ -47,6 +48,10 @@ import PortalRoles from "@/pages/portal/roles";
 import AcceptInvitation from "@/pages/auth/accept-invitation";
 import ForgotPassword from "@/pages/auth/forgot-password";
 import ResetPassword from "@/pages/auth/reset-password";
+import AuditLogs from "@/pages/portal/audit-logs";
+import Reports from "@/pages/portal/reports";
+import BlacklistPage from "@/pages/portal/blacklist";
+import SetupWizard from "@/pages/portal/setup-wizard";
 
 const queryClient = new QueryClient();
 
@@ -91,7 +96,37 @@ function ProtectedRoute({
   );
 }
 
-function getRoleHome(role: string, permissions: string[]) {
+function ProtectedRouteNoLayout({ 
+  component: Component, 
+  allowedRoles 
+}: { 
+  component: any, 
+  allowedRoles?: string[] 
+}) {
+  const { user, isLoading, isFetching } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && !isFetching && !user) {
+      setLocation("/login");
+    }
+  }, [isLoading, isFetching, user, setLocation]);
+
+  if ((isLoading || isFetching) && !user) {
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
+  }
+  if (!user) return null;
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return <div className="p-8 text-center text-red-600">Access Denied</div>;
+  }
+
+  return <Component />;
+}
+
+function getRoleHome(role: string, permissions: string[], user?: any) {
+  if (role === 'org_admin' && user?.organizationStatus === 'pending_setup' && !user?.setupWizardCompleted) {
+    return '/portal/setup';
+  }
   if (role === 'super_admin') return '/super-admin/dashboard';
   if (role === 'org_admin') return '/portal/dashboard';
   
@@ -125,7 +160,7 @@ function RootRedirect() {
   if (isLoading || (isFetching && !user)) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   if (!user) return <Redirect to="/login" />;
   const permissions: string[] = (user as any).permissions ?? [];
-  return <Redirect to={getRoleHome(user.role, permissions)} />;
+  return <Redirect to={getRoleHome(user.role, permissions, user)} />;
 }
 
 function Router() {
@@ -151,6 +186,11 @@ function Router() {
       <Route path="/super-admin/analytics">
         {() => <ProtectedRoute component={SuperAdminAnalytics} allowedRoles={['super_admin']} />}
       </Route>
+
+      {/* Setup Wizard — no sidebar layout */}
+      <Route path="/portal/setup">
+        {() => <ProtectedRouteNoLayout component={SetupWizard} allowedRoles={['org_admin']} />}
+      </Route>
       
       {/* Portal Routes — permission-based access */}
       <Route path="/portal/dashboard">
@@ -161,6 +201,15 @@ function Router() {
       </Route>
       <Route path="/portal/visitors">
         {() => <ProtectedRoute component={PortalVisitors} requiredPermission="visitors.view" />}
+      </Route>
+      <Route path="/portal/audit-logs">
+        {() => <ProtectedRoute component={AuditLogs} requiredPermission="audit_logs.view" />}
+      </Route>
+      <Route path="/portal/reports">
+        {() => <ProtectedRoute component={Reports} requiredPermission="dashboard.view" />}
+      </Route>
+      <Route path="/portal/blacklist">
+        {() => <ProtectedRoute component={BlacklistPage} requiredPermission="blacklist.view" />}
       </Route>
       <Route path="/portal/settings">
         {() => <ProtectedRoute component={PortalSettings} requiredAnyPermission={["settings.view", "settings.manage"]} />}
@@ -196,14 +245,16 @@ function App() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <AuthProvider>
-              <Router />
-            </AuthProvider>
-          </WouterRouter>
-          <Toaster />
-        </TooltipProvider>
+        <LanguageProvider>
+          <TooltipProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <AuthProvider>
+                <Router />
+              </AuthProvider>
+            </WouterRouter>
+            <Toaster />
+          </TooltipProvider>
+        </LanguageProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );

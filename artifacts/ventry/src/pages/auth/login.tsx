@@ -17,7 +17,10 @@ const loginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-function getRoleHome(role: string, permissions: string[] = []) {
+function getRoleHome(role: string, permissions: string[] = [], user?: any) {
+  if (role === 'org_admin' && user?.organizationStatus === 'pending_setup' && !user?.setupWizardCompleted) {
+    return '/portal/setup';
+  }
   if (role === 'super_admin') return '/super-admin/dashboard';
   if (role === 'org_admin') return '/portal/dashboard';
   if (permissions.includes('visit_requests.check_in') || permissions.includes('visit_requests.check_out')) return '/receptionist';
@@ -81,7 +84,7 @@ export default function Login() {
       toast({ title: "Welcome back" });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
-      setLocation(getRoleHome(result.user.role, result.user.permissions ?? []));
+      setLocation(getRoleHome(result.user.role, result.user.permissions ?? [], result.user));
     } catch (error) {
       toast({ title: "Login failed", description: "Please try again.", variant: "destructive" });
     } finally {
@@ -133,7 +136,7 @@ export default function Login() {
         toast({ title: "Welcome back" });
         await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
         await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
-        setLocation(getRoleHome(data.user.role, data.user.permissions ?? []));
+        setLocation(getRoleHome(data.user.role, data.user.permissions ?? [], data.user));
       } else {
         toast({ title: "Verification failed", description: data.error || "Incorrect code.", variant: "destructive" });
       }

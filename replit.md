@@ -196,3 +196,16 @@ Availo Ventry is a full-stack smart visitor management platform for government e
 - `/dashboard/host` — host employee dashboard
 - `/notifications` — user notifications
 - `/public/orgs/:slug` — public org info + walk-in booking
+- `/verification` — OTP send/verify via Authentica API v2
+- `/auth/verify-login-otp` — complete 2FA login after OTP verification
+
+### OTP / 2FA System
+- **Provider**: Authentica API v2 (`https://api.authentica.sa/api/v2`)
+- **Secret**: `AUTHENTICA_API_KEY` env var
+- **Library**: `artifacts/api-server/src/lib/authentica.ts` — `sendOtp()`, `verifyOtp()`, `getBalance()`, `isConfigured()`
+- **Channels**: SMS, WhatsApp, Email — Authentica generates and delivers OTPs server-side
+- **Employee 2FA**: When org has `otpEnabled=true` and `verificationPolicy!="none"`, or user has `twoFactorEnabled=true`, login returns `requires2FA` with a `loginToken`; frontend shows channel picker → OTP entry; verified via `/api/auth/verify-login-otp`
+- **Visitor phone verification**: After public booking submission, SMS OTP sent to visitor phone; verification is optional (can skip)
+- **Challenge-based security**: `/api/verification/send-otp` returns a `challengeId`; `/api/verification/verify-otp` accepts `challengeId` to bind the OTP to the original request (prevents IDOR)
+- **Rate limiting**: Per-identity limit of 3 sends per 60s window; max 5 verify attempts per challenge
+- **Pending logins store**: `auth-pending.ts` — in-memory Map with 10-min TTL and periodic cleanup

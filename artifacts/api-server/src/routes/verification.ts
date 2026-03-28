@@ -1,74 +1,119 @@
 import { Router } from "express";
-import { db, visitorsTable, otpSessionsTable } from "@workspace/db";
-import { eq, and, lt } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
-import { generateId } from "../lib/id.js";
-import { sendSmsOtp, sendWhatsappOtp, sendEmailOtp, generateOtp } from "../lib/authentica.js";
+import { db, visitorsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { sendOtp, verifyOtp, isConfigured, getBalance } from "../lib/authentica.js";
+import crypto from "crypto";
 
 const router = Router();
 
-const OTP_EXPIRY_MINUTES = 10;
-const MAX_ATTEMPTS = 5;
-
-function addMinutes(date: Date, minutes: number): Date {
-  return new Date(date.getTime() + minutes * 60 * 1000);
+interface OtpChallenge {
+  phone?: string;
+  email?: string;
+  method: string;
+  visitorId?: string;
+  loginToken?: string;
+  attempts: number;
+  createdAt: Date;
+  expiresAt: Date;
 }
 
-// POST /api/verification/send-otp
-// Sends an OTP to the visitor's phone or email
+const otpChallenges = new Map<string, OtpChallenge>();
+
+const sendRateLimits = new Map<string, { count: number; windowStart: number }>();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_SENDS = 3;
+const MAX_VERIFY_ATTEMPTS = 5;
+
+function checkSendRateLimit(key: string): boolean {
+  const now = Date.now();
+  const entry = sendRateLimits.get(key);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    sendRateLimits.set(key, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT_MAX_SENDS) return false;
+  entry.count++;
+  return true;
+}
+
+setInterval(() => {
+  const now = new Date();
+  for (const [key, val] of otpChallenges) {
+    if (val.expiresAt < now) otpChallenges.delete(key);
+  }
+  const nowMs = Date.now();
+  for (const [key, val] of sendRateLimits) {
+    if (nowMs - val.windowStart > RATE_LIMIT_WINDOW_MS * 2) sendRateLimits.delete(key);
+  }
+}, 60_000);
+
 router.post("/send-otp", async (req, res) => {
   try {
-    const { phone, email, channel = "sms", name } = req.body;
+    const { method = "sms", phone, email, loginToken, visitorId } = req.body;
 
-    if (!phone && !email) {
-      res.status(400).json({ error: "phone or email is required" });
-      return;
-    }
-    if (!["sms", "whatsapp", "email"].includes(channel)) {
-      res.status(400).json({ error: "channel must be sms, whatsapp, or email" });
-      return;
-    }
-    if (channel === "email" && !email) {
-      res.status(400).json({ error: "email is required for email channel" });
+    if (!["sms", "whatsapp", "email"].includes(method)) {
+      res.status(400).json({ error: "method must be sms, whatsapp, or email" });
       return;
     }
 
-    const otp = generateOtp();
-    const sessionId = generateId();
-    const expiresAt = addMinutes(new Date(), OTP_EXPIRY_MINUTES);
+    let resolvedPhone = phone;
+    let resolvedEmail = email;
+    if (loginToken) {
+      const { pendingLogins } = await import("./auth-pending.js");
+      const pending = pendingLogins.get(loginToken);
+      if (!pending || pending.expiresAt < new Date()) {
+        res.status(400).json({ error: "Login session expired" });
+        return;
+      }
+      resolvedPhone = pending.phone;
+      resolvedEmail = pending.email;
+    }
 
-    await db.insert(otpSessionsTable).values({
-      id: sessionId,
-      phone: phone || null,
-      email: email || null,
-      otp,
-      channel,
-      attempts: 0,
-      verified: false,
-      expiresAt,
+    if (method === "email" && !resolvedEmail) {
+      res.status(400).json({ error: "Email is required for email channel" });
+      return;
+    }
+    if ((method === "sms" || method === "whatsapp") && !resolvedPhone) {
+      res.status(400).json({ error: "Phone is required for SMS/WhatsApp channel" });
+      return;
+    }
+
+    const rateLimitKey = resolvedPhone || resolvedEmail || "unknown";
+    if (!checkSendRateLimit(rateLimitKey)) {
+      res.status(429).json({ error: "Too many OTP requests. Please wait before trying again." });
+      return;
+    }
+
+    const result = await sendOtp({
+      method: method as "sms" | "whatsapp" | "email",
+      phone: resolvedPhone,
+      email: resolvedEmail,
     });
 
-    let result;
-    if (channel === "email") {
-      result = await sendEmailOtp(email, otp, name || "Visitor");
-    } else if (channel === "whatsapp") {
-      result = await sendWhatsappOtp(phone, otp);
-    } else {
-      result = await sendSmsOtp(phone, otp);
-    }
-
     if (!result.success) {
-      await db.delete(otpSessionsTable).where(eq(otpSessionsTable.id, sessionId));
       res.status(502).json({ error: "Failed to send OTP", details: result.errors || result.message });
       return;
     }
 
+    const challengeId = crypto.randomBytes(16).toString("hex");
+    otpChallenges.set(challengeId, {
+      phone: resolvedPhone || undefined,
+      email: resolvedEmail || undefined,
+      method,
+      visitorId: visitorId || undefined,
+      loginToken: loginToken || undefined,
+      attempts: 0,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+
     res.json({
       success: true,
-      sessionId,
-      expiresAt,
-      channel,
-      message: `OTP sent via ${channel}`,
+      challengeId,
+      method,
+      phone: resolvedPhone || null,
+      email: resolvedEmail || null,
+      message: `OTP sent via ${method}`,
     });
   } catch (err) {
     console.error("Send OTP error:", err);
@@ -76,78 +121,89 @@ router.post("/send-otp", async (req, res) => {
   }
 });
 
-// POST /api/verification/verify-otp
-// Verifies an OTP and optionally marks the visitor as verified
 router.post("/verify-otp", async (req, res) => {
   try {
-    const { sessionId, otp, visitorId } = req.body;
+    const { challengeId, phone, email, otp } = req.body;
 
-    if (!sessionId || !otp) {
-      res.status(400).json({ error: "sessionId and otp are required" });
+    if (!otp) {
+      res.status(400).json({ error: "OTP is required" });
       return;
     }
 
-    const sessions = await db.select().from(otpSessionsTable)
-      .where(eq(otpSessionsTable.id, sessionId))
-      .limit(1);
+    if (challengeId) {
+      const challenge = otpChallenges.get(challengeId);
+      if (!challenge) {
+        res.status(400).json({ error: "Invalid or expired challenge" });
+        return;
+      }
+      if (challenge.expiresAt < new Date()) {
+        otpChallenges.delete(challengeId);
+        res.status(400).json({ error: "Challenge expired" });
+        return;
+      }
+      if (challenge.attempts >= MAX_VERIFY_ATTEMPTS) {
+        otpChallenges.delete(challengeId);
+        res.status(429).json({ error: "Too many attempts. Please request a new code." });
+        return;
+      }
+      challenge.attempts++;
 
-    const session = sessions[0];
-    if (!session) {
-      res.status(400).json({ error: "Invalid session", code: "SESSION_NOT_FOUND" });
-      return;
-    }
+      const result = await verifyOtp({
+        phone: challenge.phone,
+        email: challenge.email,
+        otp: otp.trim(),
+      });
 
-    if (session.verified) {
-      res.status(400).json({ error: "OTP already used", code: "ALREADY_VERIFIED" });
-      return;
-    }
+      if (!result.status) {
+        res.status(400).json({
+          error: "OTP verification failed",
+          message: result.message || "Invalid or expired OTP",
+          attemptsRemaining: MAX_VERIFY_ATTEMPTS - challenge.attempts,
+        });
+        return;
+      }
 
-    if (new Date(session.expiresAt) < new Date()) {
-      await db.delete(otpSessionsTable).where(eq(otpSessionsTable.id, sessionId));
-      res.status(400).json({ error: "OTP has expired", code: "EXPIRED" });
-      return;
-    }
+      otpChallenges.delete(challengeId);
 
-    if ((session.attempts || 0) >= MAX_ATTEMPTS) {
-      res.status(429).json({ error: "Too many attempts — request a new OTP", code: "TOO_MANY_ATTEMPTS" });
-      return;
-    }
+      if (challenge.visitorId) {
+        await db.update(visitorsTable).set({
+          verificationStatus: "verified_otp",
+          otpVerifiedAt: new Date(),
+          otpPhoneUsed: challenge.phone || undefined,
+          lastVerificationMethod: "otp",
+          lastVerifiedAt: new Date(),
+        }).where(eq(visitorsTable.id, challenge.visitorId));
+      }
 
-    if (session.otp !== otp.trim()) {
-      await db.update(otpSessionsTable)
-        .set({ attempts: (session.attempts || 0) + 1 })
-        .where(eq(otpSessionsTable.id, sessionId));
-
-      const remaining = MAX_ATTEMPTS - (session.attempts || 0) - 1;
-      res.status(400).json({
-        error: "Incorrect OTP",
-        code: "WRONG_OTP",
-        attemptsRemaining: remaining,
+      res.json({
+        success: true,
+        verified: true,
+        phone: challenge.phone || null,
+        email: challenge.email || null,
       });
       return;
     }
 
-    await db.update(otpSessionsTable)
-      .set({ verified: true })
-      .where(eq(otpSessionsTable.id, sessionId));
+    if (!phone && !email) {
+      res.status(400).json({ error: "Phone or email is required" });
+      return;
+    }
 
-    if (visitorId) {
-      await db.update(visitorsTable)
-        .set({
-          verificationStatus: "verified_otp",
-          otpVerifiedAt: new Date(),
-          otpPhoneUsed: session.phone || undefined,
-          lastVerificationMethod: "otp",
-          lastVerifiedAt: new Date(),
-        })
-        .where(eq(visitorsTable.id, visitorId));
+    const result = await verifyOtp({ phone, email, otp: otp.trim() });
+
+    if (!result.status) {
+      res.status(400).json({
+        error: "OTP verification failed",
+        message: result.message || "Invalid or expired OTP",
+      });
+      return;
     }
 
     res.json({
       success: true,
       verified: true,
-      phone: session.phone,
-      email: session.email,
+      phone: phone || null,
+      email: email || null,
     });
   } catch (err) {
     console.error("Verify OTP error:", err);
@@ -155,13 +211,18 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-// GET /api/verification/status (authenticated — check if Authentica is configured)
-router.get("/status", requireAuth, async (_req, res) => {
-  const isConfigured = !!process.env.AUTHENTICA_API_KEY;
+router.get("/status", async (_req, res) => {
+  const configured = isConfigured();
+  let balance = null;
+  if (configured) {
+    const balanceResult = await getBalance();
+    if (balanceResult.success) balance = balanceResult.balance;
+  }
   res.json({
     authentica: {
-      configured: isConfigured,
-      channels: isConfigured ? ["sms", "whatsapp", "email"] : [],
+      configured,
+      channels: configured ? ["sms", "whatsapp", "email"] : [],
+      balance,
     },
   });
 });

@@ -1,0 +1,794 @@
+# SMS/WhatsApp/Email OTP Verification for Sign-In and Visitor Requests
+
+## Overview
+Add OTP verification using the Authentica API (https://api.authentica.sa/api/v2). Two scenarios:
+1. **Employee sign-in 2FA** — after password login, require OTP verification
+2. **Public visitor identity verification** — after submitting a visit request, verify visitor phone
+
+## CRITICAL: Fix Authentica Integration First
+
+The existing `lib/authentica.ts` uses WRONG endpoints. The correct Authentica API v2 works like this:
+
+**Send OTP:** `POST https://api.authentica.sa/api/v2/send-otp`
+- Header: `X-Authorization: YOUR_API_KEY`
+- Body: `{ "method": "sms", "phone": "+966XXXXXXXXX" }` (for SMS/WhatsApp)
+- Body: `{ "method": "email", "email": "user@email.com" }` (for Email)
+- Authentica generates and sends the OTP automatically — we do NOT generate it ourselves
+
+**Verify OTP:** `POST https://api.authentica.sa/api/v2/verify-otp`
+- Header: `X-Authorization: YOUR_API_KEY`
+- Body: `{ "phone": "+966XXXXXXXXX", "otp": "123456" }` (for SMS/WhatsApp)
+- Body: `{ "email": "user@email.com", "otp": "123456" }` (for Email)
+- Authentica verifies the OTP server-side — we do NOT need to store OTPs locally
+
+The API key is already in Secrets as `AUTHENTICA_API_KEY`.
+
+---
+
+## PART 1: Rewrite Authentica Library
+
+Replace the ENTIRE content of `artifacts/api-server/src/lib/authentica.ts` with:
+
+```typescript
+const AUTHENTICA_BASE = "https://api.authentica.sa/api/v2";
+
+function getApiKey(): string {
+  const key = process.env.AUTHENTICA_API_KEY;
+  if (!key) throw new Error("AUTHENTICA_API_KEY environment variable is not set");
+  return key;
+}
+
+export interface AuthenticaResult {
+  success: boolean;
+  data?: unknown;
+  message?: string;
+  errors?: Array<{ message: string }>;
+}
+
+export interface AuthenticaVerifyResult {
+  status: boolean;
+  message?: string;
+  errors?: Array<{ message: string }>;
+}
+
+/**
+ * Send OTP via SMS, WhatsApp, or Email using Authentica API v2.
+ * Authentica generates and delivers the OTP automatically.
+ */
+export async function sendOtp(params: {
+  method: "sms" | "whatsapp" | "email";
+  phone?: string;
+  email?: string;
+}): Promise<AuthenticaResult> {
+  try {
+    const body: Record<string, string> = { method: params.method };
+    
+    if (params.method === "email") {
+      if (!params.email) return { success: false, message: "Email is required for email channel" };
+      body.email = params.email;
+    } else {
+      if (!params.phone) return { success: false, message: "Phone is required for SMS/WhatsApp channel" };
+      body.phone = params.phone;
+    }
+
+    const res = await fetch(`${AUTHENTICA_BASE}/send-otp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Authorization": getApiKey(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json() as AuthenticaResult;
+    console.log(`Authentica send-otp (${params.method}):`, data.success ? "OK" : data.message || "Failed");
+    return data;
+  } catch (err) {
+    console.error("Authentica sendOtp error:", err);
+    return { success: false, message: "Failed to send OTP" };
+  }
+}
+
+/**
+ * Verify OTP using Authentica API v2.
+ * Authentica checks the OTP server-side.
+ */
+export async function verifyOtp(params: {
+  phone?: string;
+  email?: string;
+  otp: string;
+}): Promise<AuthenticaVerifyResult> {
+  try {
+    const body: Record<string, string> = { otp: params.otp };
+    if (params.phone) body.phone = params.phone;
+    if (params.email) body.email = params.email;
+
+    const res = await fetch(`${AUTHENTICA_BASE}/verify-otp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Authorization": getApiKey(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json() as AuthenticaVerifyResult;
+    console.log("Authentica verify-otp:", data.status ? "Verified" : data.message || "Failed");
+    return data;
+  } catch (err) {
+    console.error("Authentica verifyOtp error:", err);
+    return { status: false, message: "Failed to verify OTP" };
+  }
+}
+
+/**
+ * Check current Authentica balance.
+ */
+export async function getBalance(): Promise<{ success: boolean; balance?: number }> {
+  try {
+    const res = await fetch(`${AUTHENTICA_BASE}/balance`, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "X-Authorization": getApiKey(),
+      },
+    });
+    const data = await res.json();
+    return { success: data.success, balance: data.data?.balance };
+  } catch (err) {
+    console.error("Authentica getBalance error:", err);
+    return { success: false };
+  }
+}
+
+export function isConfigured(): boolean {
+  return !!process.env.AUTHENTICA_API_KEY;
+}
+```
+
+---
+
+## PART 2: Rewrite Verification Routes
+
+Replace the ENTIRE content of `artifacts/api-server/src/routes/verification.ts` with:
+
+```typescript
+import { Router } from "express";
+import { db, visitorsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { sendOtp, verifyOtp, isConfigured, getBalance } from "../lib/authentica.js";
+
+const router = Router();
+
+// POST /api/verification/send-otp
+router.post("/send-otp", async (req, res) => {
+  try {
+    const { method = "sms", phone, email, loginToken } = req.body;
+
+    if (!["sms", "whatsapp", "email"].includes(method)) {
+      res.status(400).json({ error: "method must be sms, whatsapp, or email" });
+      return;
+    }
+
+    // If loginToken provided, resolve real phone/email from pending login
+    let resolvedPhone = phone;
+    let resolvedEmail = email;
+    if (loginToken) {
+      const { pendingLogins } = await import("./auth-pending.js");
+      const pending = pendingLogins.get(loginToken);
+      if (!pending || pending.expiresAt < new Date()) {
+        res.status(400).json({ error: "Login session expired" });
+        return;
+      }
+      resolvedPhone = pending.phone;
+      resolvedEmail = pending.email;
+    }
+
+    if (method === "email" && !resolvedEmail) {
+      res.status(400).json({ error: "Email is required for email channel" });
+      return;
+    }
+    if ((method === "sms" || method === "whatsapp") && !resolvedPhone) {
+      res.status(400).json({ error: "Phone is required for SMS/WhatsApp channel" });
+      return;
+    }
+
+    const result = await sendOtp({
+      method: method as "sms" | "whatsapp" | "email",
+      phone: resolvedPhone,
+      email: resolvedEmail,
+    });
+
+    if (!result.success) {
+      res.status(502).json({ error: "Failed to send OTP", details: result.errors || result.message });
+      return;
+    }
+
+    res.json({
+      success: true,
+      method,
+      // Return the phone/email used so frontend can pass it back for verification
+      phone: resolvedPhone || null,
+      email: resolvedEmail || null,
+      message: `OTP sent via ${method}`,
+    });
+  } catch (err) {
+    console.error("Send OTP error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// POST /api/verification/verify-otp
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { phone, email, otp, visitorId } = req.body;
+
+    if (!otp) {
+      res.status(400).json({ error: "OTP is required" });
+      return;
+    }
+    if (!phone && !email) {
+      res.status(400).json({ error: "Phone or email is required" });
+      return;
+    }
+
+    const result = await verifyOtp({ phone, email, otp: otp.trim() });
+
+    if (!result.status) {
+      res.status(400).json({
+        error: "OTP verification failed",
+        message: result.message || "Invalid or expired OTP",
+      });
+      return;
+    }
+
+    // If visitorId provided, update visitor verification status
+    if (visitorId) {
+      await db.update(visitorsTable).set({
+        verificationStatus: "verified_otp",
+        otpVerifiedAt: new Date(),
+        otpPhoneUsed: phone || undefined,
+        lastVerificationMethod: "otp",
+        lastVerifiedAt: new Date(),
+      }).where(eq(visitorsTable.id, visitorId));
+    }
+
+    res.json({
+      success: true,
+      verified: true,
+      phone: phone || null,
+      email: email || null,
+    });
+  } catch (err) {
+    console.error("Verify OTP error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// GET /api/verification/status
+router.get("/status", async (_req, res) => {
+  const configured = isConfigured();
+  let balance = null;
+  if (configured) {
+    const balanceResult = await getBalance();
+    if (balanceResult.success) balance = balanceResult.balance;
+  }
+  res.json({
+    authentica: {
+      configured,
+      channels: configured ? ["sms", "whatsapp", "email"] : [],
+      balance,
+    },
+  });
+});
+
+export default router;
+```
+
+---
+
+## PART 3: Create Pending Logins Store
+
+Create a new file `artifacts/api-server/src/routes/auth-pending.ts`:
+
+```typescript
+interface PendingLogin {
+  userId: string;
+  phone: string | null;
+  email: string | null;
+  expiresAt: Date;
+}
+
+export const pendingLogins = new Map<string, PendingLogin>();
+
+// Clean up expired entries every 5 minutes
+setInterval(() => {
+  const now = new Date();
+  for (const [key, value] of pendingLogins) {
+    if (value.expiresAt < now) pendingLogins.delete(key);
+  }
+}, 5 * 60 * 1000);
+```
+
+---
+
+## PART 4: Add 2FA to Login Flow
+
+In `artifacts/api-server/src/routes/auth.ts`:
+
+### 4a. Add imports at the top
+```typescript
+import { generateToken } from "../lib/id.js";
+```
+
+### 4b. Add 2FA check in POST /login
+
+After the org status checks (after the `if (org.status === "pending_setup"...)` block) and BEFORE `await db.update(usersTable).set({ lastLoginAt...})`, add:
+
+```typescript
+// Check if 2FA / OTP is required
+let orgRequiresOtp = false;
+if (user.orgId && user.role !== "super_admin") {
+  const orgForOtp = orgInfo || (await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1))[0];
+  if (orgForOtp && orgForOtp.otpEnabled && orgForOtp.verificationPolicy !== "none") {
+    orgRequiresOtp = true;
+  }
+}
+
+if (user.twoFactorEnabled || orgRequiresOtp) {
+  // Don't create session yet — require OTP first
+  const loginToken = generateToken(32);
+  
+  const { pendingLogins } = await import("./auth-pending.js");
+  pendingLogins.set(loginToken, {
+    userId: user.id,
+    phone: user.phone,
+    email: user.email,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  });
+
+  res.json({
+    requires2FA: true,
+    loginToken,
+    phone: user.phone ? user.phone.replace(/(.{4}).+(.{2})/, '$1****$2') : null,
+    email: user.email ? user.email.replace(/(.{2}).+(@.+)/, '$1***$2') : null,
+    userName: user.name,
+    channels: ["sms", "whatsapp", "email"].filter(c => {
+      if (c === "email") return !!user.email;
+      return !!user.phone;
+    }),
+  });
+  return;
+}
+```
+
+### 4c. Add verify-login-otp endpoint
+
+Add this new route in auth.ts:
+
+```typescript
+// POST /api/auth/verify-login-otp
+router.post("/verify-login-otp", async (req, res) => {
+  try {
+    const { loginToken, phone, email, otp } = req.body;
+    if (!loginToken || !otp) {
+      res.status(400).json({ error: "loginToken and otp are required" });
+      return;
+    }
+
+    const { pendingLogins } = await import("./auth-pending.js");
+    const pending = pendingLogins.get(loginToken);
+    if (!pending || pending.expiresAt < new Date()) {
+      pendingLogins.delete(loginToken);
+      res.status(400).json({ error: "Login session expired. Please log in again." });
+      return;
+    }
+
+    // Verify OTP with Authentica
+    const { verifyOtp } = await import("../lib/authentica.js");
+    const result = await verifyOtp({
+      phone: phone || pending.phone || undefined,
+      email: email || pending.email || undefined,
+      otp: otp.trim(),
+    });
+
+    if (!result.status) {
+      res.status(400).json({ error: "Incorrect OTP. Please try again.", message: result.message });
+      return;
+    }
+
+    // OTP verified — complete login
+    pendingLogins.delete(loginToken);
+    const userId = pending.userId;
+    const users = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    const user = users[0];
+    if (!user) {
+      res.status(400).json({ error: "User not found" });
+      return;
+    }
+
+    await db.update(usersTable)
+      .set({ lastLoginAt: new Date(), lastActiveAt: new Date(), loginCount: (user.loginCount || 0) + 1 })
+      .where(eq(usersTable.id, user.id));
+
+    (req as unknown as { session: { userId: string; save: (cb: (err: unknown) => void) => void } }).session.userId = user.id;
+
+    let orgInfo = null;
+    if (user.orgId) {
+      const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
+      if (orgs[0]) orgInfo = orgs[0];
+    }
+
+    res.json({ user: await buildUserResponse(user, orgInfo) });
+  } catch (err) {
+    console.error("Verify login OTP error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+```
+
+---
+
+## PART 5: Frontend — Login Page OTP Step
+
+In `artifacts/ventry/src/pages/auth/login.tsx`:
+
+### 5a. Add states
+```typescript
+const [otpStep, setOtpStep] = useState(false);
+const [loginToken, setLoginToken] = useState("");
+const [maskedPhone, setMaskedPhone] = useState("");
+const [maskedEmail, setMaskedEmail] = useState("");
+const [availableChannels, setAvailableChannels] = useState<string[]>([]);
+const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("sms");
+const [otpCode, setOtpCode] = useState("");
+const [otpSent, setOtpSent] = useState(false);
+const [sendingOtp, setSendingOtp] = useState(false);
+const [verifyingOtp, setVerifyingOtp] = useState(false);
+const [resolvedPhone, setResolvedPhone] = useState("");
+const [resolvedEmail, setResolvedEmail] = useState("");
+```
+
+### 5b. Replace the onSubmit to use direct fetch (not the generated hook)
+```typescript
+const onSubmit = async (data: z.infer<typeof loginSchema>) => {
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+
+    if (result.requires2FA) {
+      setLoginToken(result.loginToken);
+      setMaskedPhone(result.phone || "");
+      setMaskedEmail(result.email || "");
+      setAvailableChannels(result.channels || ["sms"]);
+      setOtpChannel(result.channels?.[0] || "sms");
+      setOtpStep(true);
+      return;
+    }
+
+    if (!res.ok) {
+      toast({ title: "Login failed", description: result.message || "Invalid credentials.", variant: "destructive" });
+      return;
+    }
+
+    toast({ title: "Welcome back" });
+    await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+    setLocation(getRoleHome(result.user.role, result.user.permissions ?? []));
+  } catch (error) {
+    toast({ title: "Login failed", description: "Please try again.", variant: "destructive" });
+  }
+};
+```
+
+### 5c. Add send and verify OTP handlers
+```typescript
+const handleSendOtp = async () => {
+  setSendingOtp(true);
+  try {
+    const res = await fetch("/api/verification/send-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: otpChannel, loginToken }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setOtpSent(true);
+      setResolvedPhone(data.phone || "");
+      setResolvedEmail(data.email || "");
+      toast({ title: "Code Sent", description: `Verification code sent via ${otpChannel.toUpperCase()}.` });
+    } else {
+      toast({ title: "Failed", description: data.error || "Try again.", variant: "destructive" });
+    }
+  } catch {
+    toast({ title: "Failed to send code", variant: "destructive" });
+  } finally {
+    setSendingOtp(false);
+  }
+};
+
+const handleVerifyOtp = async () => {
+  setVerifyingOtp(true);
+  try {
+    const res = await fetch("/api/auth/verify-login-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        loginToken,
+        phone: resolvedPhone || undefined,
+        email: resolvedEmail || undefined,
+        otp: otpCode,
+      }),
+    });
+    const data = await res.json();
+    if (data.user) {
+      toast({ title: "Welcome back" });
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+      setLocation(getRoleHome(data.user.role, data.user.permissions ?? []));
+    } else {
+      toast({ title: "Verification failed", description: data.error || "Incorrect code.", variant: "destructive" });
+    }
+  } catch {
+    toast({ title: "Verification failed", variant: "destructive" });
+  } finally {
+    setVerifyingOtp(false);
+  }
+};
+```
+
+### 5d. Add OTP step UI
+
+When `otpStep` is true, show a 2FA verification screen INSTEAD of the login form. Replace the existing Card with a conditional:
+
+```tsx
+{otpStep ? (
+  <Card className="p-8 border-border/50 shadow-xl shadow-black/5 rounded-2xl">
+    <div className="text-center mb-6">
+      <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <ShieldCheck className="w-7 h-7" />
+      </div>
+      <h3 className="text-xl font-display font-bold">Two-Factor Verification</h3>
+      <p className="text-sm text-muted-foreground mt-2">Choose how to receive your verification code</p>
+    </div>
+
+    {!otpSent ? (
+      <div className="space-y-4">
+        <div className="flex gap-2">
+          {availableChannels.includes("sms") && (
+            <button type="button" onClick={() => setOtpChannel("sms")}
+              className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "sms" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+              📱 SMS
+            </button>
+          )}
+          {availableChannels.includes("whatsapp") && (
+            <button type="button" onClick={() => setOtpChannel("whatsapp")}
+              className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "whatsapp" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+              💬 WhatsApp
+            </button>
+          )}
+          {availableChannels.includes("email") && (
+            <button type="button" onClick={() => setOtpChannel("email")}
+              className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "email" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+              ✉️ Email
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground text-center">
+          Code will be sent to {otpChannel === "email" ? maskedEmail : maskedPhone}
+        </p>
+        <Button className="w-full h-12 rounded-xl" onClick={handleSendOtp} disabled={sendingOtp}>
+          {sendingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send Verification Code"}
+        </Button>
+      </div>
+    ) : (
+      <div className="space-y-4">
+        <p className="text-sm text-muted-foreground text-center">
+          Enter the code sent via {otpChannel.toUpperCase()}
+        </p>
+        <Input
+          className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50"
+          placeholder="000000"
+          maxLength={6}
+          value={otpCode}
+          onChange={e => setOtpCode(e.target.value.replace(/\D/g, ""))}
+          autoFocus
+        />
+        <Button className="w-full h-12 rounded-xl" onClick={handleVerifyOtp} disabled={verifyingOtp || otpCode.length < 4}>
+          {verifyingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & Sign In"}
+        </Button>
+        <div className="flex justify-between text-xs">
+          <button type="button" className="text-primary hover:underline" onClick={() => { setOtpSent(false); setOtpCode(""); }}>
+            Change method
+          </button>
+          <button type="button" className="text-primary hover:underline" onClick={handleSendOtp}>
+            Resend code
+          </button>
+        </div>
+      </div>
+    )}
+    <div className="mt-4 text-center">
+      <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={() => { setOtpStep(false); setOtpSent(false); setOtpCode(""); }}>
+        ← Back to login
+      </button>
+    </div>
+  </Card>
+) : (
+  /* Keep the existing login form Card here */
+)}
+```
+
+---
+
+## PART 6: Frontend — Visitor Phone Verification After Booking
+
+In `artifacts/ventry/src/pages/public/booking.tsx`:
+
+### 6a. Add states and import
+Add `ShieldCheck` to lucide-react imports.
+
+```typescript
+const [otpStep, setOtpStep] = useState(false);
+const [otpCode, setOtpCode] = useState("");
+const [verifying, setVerifying] = useState(false);
+const [otpPhone, setOtpPhone] = useState("");
+const [trackingToken, setTrackingToken] = useState<string | null>(null);
+```
+
+### 6b. Update onSubmit
+```typescript
+const onSubmit = async (data: z.infer<typeof bookingSchema>) => {
+  try {
+    const result = await submitMutation.mutateAsync({ slug, data });
+    setTrackingToken(result.trackingToken);
+    setOtpPhone(data.phone);
+
+    // Send OTP for visitor phone verification
+    try {
+      const otpRes = await fetch("/api/verification/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method: "sms", phone: data.phone }),
+      });
+      const otpData = await otpRes.json();
+      if (otpData.success) {
+        setOtpStep(true);
+      } else {
+        setIsSuccess(true); // Skip OTP if service unavailable
+      }
+    } catch {
+      setIsSuccess(true); // Skip OTP if service unavailable
+    }
+  } catch (e) {
+    toast({ title: "Submission Failed", description: "Please try again later.", variant: "destructive" });
+  }
+};
+```
+
+### 6c. Add OTP verification screen
+
+Add this BEFORE the `if (isSuccess)` block:
+
+```tsx
+if (otpStep && !isSuccess) {
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
+      <Card className="w-full max-w-md p-8 text-center border-border/50 shadow-xl rounded-3xl animate-in-slide">
+        <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+          <ShieldCheck className="w-8 h-8" />
+        </div>
+        <h2 className="text-2xl font-display font-bold text-foreground mb-2">Verify Your Phone</h2>
+        <p className="text-muted-foreground mb-6">Enter the verification code sent to your phone number.</p>
+        <Input
+          className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50 border-slate-200 mb-4"
+          placeholder="000000"
+          maxLength={6}
+          value={otpCode}
+          onChange={e => setOtpCode(e.target.value.replace(/\D/g, ""))}
+          autoFocus
+        />
+        <Button
+          className="w-full h-12 rounded-xl text-base font-semibold mb-3"
+          disabled={verifying || otpCode.length < 4}
+          onClick={async () => {
+            setVerifying(true);
+            try {
+              const res = await fetch("/api/verification/verify-otp", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ phone: otpPhone, otp: otpCode }),
+              });
+              const data = await res.json();
+              if (data.verified) {
+                setIsSuccess(true);
+              } else {
+                toast({ title: "Incorrect Code", description: "Please try again.", variant: "destructive" });
+              }
+            } catch {
+              toast({ title: "Verification failed", variant: "destructive" });
+            } finally {
+              setVerifying(false);
+            }
+          }}
+        >
+          {verifying ? "Verifying..." : "Verify Phone"}
+        </Button>
+        <div className="flex justify-between text-sm">
+          <button type="button" className="text-primary hover:underline" onClick={async () => {
+            await fetch("/api/verification/send-otp", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ method: "sms", phone: otpPhone }),
+            });
+            toast({ title: "Code Resent" });
+          }}>Resend Code</button>
+          <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setIsSuccess(true)}>
+            Skip
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+```
+
+### 6d. Update success screen to show tracking link
+
+Update the success screen to include:
+```tsx
+{trackingToken && (
+  <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 mb-6 text-left">
+    <p className="text-sm font-semibold text-blue-900 mb-2">Track your request:</p>
+    <a href={`/public/pass/${trackingToken}`} className="text-sm text-blue-600 hover:underline break-all">
+      {window.location.origin}/public/pass/{trackingToken}
+    </a>
+    <p className="text-xs text-blue-500 mt-2">Bookmark this link to check your request status anytime.</p>
+  </div>
+)}
+```
+
+---
+
+## PART 7: Update Secrets
+
+Make sure in Replit Secrets:
+- `AUTHENTICA_API_KEY` = `$2y$10$ete2x2wU4qIdzS68VoBdF.TesMkVfLyHQyMSHncAMWL06jTzfc/D2`
+
+---
+
+## Summary of Files
+
+**Create:**
+- `artifacts/api-server/src/routes/auth-pending.ts` — Pending login store
+
+**Replace entirely:**
+- `artifacts/api-server/src/lib/authentica.ts` — Correct Authentica API v2 integration
+- `artifacts/api-server/src/routes/verification.ts` — Simplified routes using Authentica server-side verification
+
+**Modify:**
+- `artifacts/api-server/src/routes/auth.ts` — Add 2FA check + verify-login-otp endpoint
+- `artifacts/ventry/src/pages/auth/login.tsx` — Add OTP step UI
+- `artifacts/ventry/src/pages/public/booking.tsx` — Add visitor phone OTP + tracking link
+
+## Execution Order
+1. Create auth-pending.ts
+2. Replace authentica.ts with correct API
+3. Replace verification.ts with simplified routes
+4. Update auth.ts with 2FA flow + verify-login-otp
+5. Update login.tsx with OTP step UI
+6. Update booking.tsx with visitor OTP + tracking link
+7. Test:
+   - Login with org that has otpEnabled + verificationPolicy != "none" → should show OTP step
+   - Select SMS → receive code on phone → enter → login complete
+   - Select WhatsApp → receive code → enter → login complete
+   - Select Email → receive code → enter → login complete
+   - Submit visitor booking → receive SMS code → verify → success with tracking link
+   - Skip OTP → still works but unverified

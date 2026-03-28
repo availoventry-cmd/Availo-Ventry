@@ -3,7 +3,6 @@ import { useLocation, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useLogin } from "@workspace/api-client-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -32,29 +31,116 @@ export default function Login() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showPassword, setShowPassword] = useState(false);
-  
+
+  const [otpStep, setOtpStep] = useState(false);
+  const [loginToken, setLoginToken] = useState("");
+  const [maskedPhone, setMaskedPhone] = useState("");
+  const [maskedEmail, setMaskedEmail] = useState("");
+  const [availableChannels, setAvailableChannels] = useState<string[]>([]);
+  const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("sms");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [resolvedPhone, setResolvedPhone] = useState("");
+  const [resolvedEmail, setResolvedEmail] = useState("");
+  const [challengeId, setChallengeId] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
   });
 
-  const loginMutation = useLogin();
-
   const onSubmit = async (data: z.infer<typeof loginSchema>) => {
+    setIsSubmitting(true);
     try {
-      const res = await loginMutation.mutateAsync({ data });
-      toast({ title: "Welcome back", description: "Successfully signed in." });
-      
+      const res = await fetch(`${import.meta.env.BASE_URL}api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+      const result = await res.json();
+
+      if (result.requires2FA) {
+        setLoginToken(result.loginToken);
+        setMaskedPhone(result.phone || "");
+        setMaskedEmail(result.email || "");
+        setAvailableChannels(result.channels || ["sms"]);
+        setOtpChannel(result.channels?.[0] || "sms");
+        setOtpStep(true);
+        return;
+      }
+
+      if (!res.ok) {
+        toast({ title: "Login failed", description: result.message || "Invalid credentials.", variant: "destructive" });
+        return;
+      }
+
+      toast({ title: "Welcome back" });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
-      
-      setLocation(getRoleHome(res.user.role, res.user.permissions ?? []));
+      setLocation(getRoleHome(result.user.role, result.user.permissions ?? []));
     } catch (error) {
-      toast({
-        title: "Login failed",
-        description: "Invalid credentials. Please try again.",
-        variant: "destructive",
+      toast({ title: "Login failed", description: "Please try again.", variant: "destructive" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSendOtp = async () => {
+    setSendingOtp(true);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method: otpChannel, loginToken }),
       });
+      const data = await res.json();
+      if (data.success) {
+        setOtpSent(true);
+        setChallengeId(data.challengeId || "");
+        setResolvedPhone(data.phone || "");
+        setResolvedEmail(data.email || "");
+        toast({ title: "Code Sent", description: `Verification code sent via ${otpChannel.toUpperCase()}.` });
+      } else {
+        toast({ title: "Failed", description: data.error || "Try again.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to send code", variant: "destructive" });
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    setVerifyingOtp(true);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/auth/verify-login-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          loginToken,
+          phone: resolvedPhone || undefined,
+          email: resolvedEmail || undefined,
+          otp: otpCode,
+        }),
+      });
+      const data = await res.json();
+      if (data.user) {
+        toast({ title: "Welcome back" });
+        await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+        setLocation(getRoleHome(data.user.role, data.user.permissions ?? []));
+      } else {
+        toast({ title: "Verification failed", description: data.error || "Incorrect code.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Verification failed", variant: "destructive" });
+    } finally {
+      setVerifyingOtp(false);
     }
   };
 
@@ -95,74 +181,147 @@ export default function Login() {
             <p className="text-muted-foreground mt-2">Sign in to your Ventry portal</p>
           </div>
 
-          <Card className="p-8 border-border/50 shadow-xl shadow-black/5 rounded-2xl">
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="font-semibold">Work Email</FormLabel>
-                      <FormControl>
-                        <Input 
-                          placeholder="name@organization.gov.sa" 
-                          className="h-12 rounded-xl bg-slate-50 border-slate-200 focus:bg-white transition-colors" 
-                          {...field} 
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <div className="flex items-center justify-between">
-                        <FormLabel className="font-semibold">Password</FormLabel>
-                        <Link href="/forgot-password" className="text-sm font-medium text-primary hover:underline">Forgot password?</Link>
-                      </div>
-                      <FormControl>
-                        <div className="relative">
+          {otpStep ? (
+            <Card className="p-8 border-border/50 shadow-xl shadow-black/5 rounded-2xl">
+              <div className="text-center mb-6">
+                <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <ShieldCheck className="w-7 h-7" />
+                </div>
+                <h3 className="text-xl font-display font-bold">Two-Factor Verification</h3>
+                <p className="text-sm text-muted-foreground mt-2">Choose how to receive your verification code</p>
+              </div>
+
+              {!otpSent ? (
+                <div className="space-y-4">
+                  <div className="flex gap-2">
+                    {availableChannels.includes("sms") && (
+                      <button type="button" onClick={() => setOtpChannel("sms")}
+                        className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "sms" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+                        SMS
+                      </button>
+                    )}
+                    {availableChannels.includes("whatsapp") && (
+                      <button type="button" onClick={() => setOtpChannel("whatsapp")}
+                        className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "whatsapp" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+                        WhatsApp
+                      </button>
+                    )}
+                    {availableChannels.includes("email") && (
+                      <button type="button" onClick={() => setOtpChannel("email")}
+                        className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "email" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+                        Email
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground text-center">
+                    Code will be sent to {otpChannel === "email" ? maskedEmail : maskedPhone}
+                  </p>
+                  <Button className="w-full h-12 rounded-xl" onClick={handleSendOtp} disabled={sendingOtp}>
+                    {sendingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send Verification Code"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground text-center">
+                    Enter the code sent via {otpChannel.toUpperCase()}
+                  </p>
+                  <Input
+                    className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50"
+                    placeholder="000000"
+                    maxLength={6}
+                    value={otpCode}
+                    onChange={e => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                    autoFocus
+                  />
+                  <Button className="w-full h-12 rounded-xl" onClick={handleVerifyOtp} disabled={verifyingOtp || otpCode.length < 4}>
+                    {verifyingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & Sign In"}
+                  </Button>
+                  <div className="flex justify-between text-xs">
+                    <button type="button" className="text-primary hover:underline" onClick={() => { setOtpSent(false); setOtpCode(""); }}>
+                      Change method
+                    </button>
+                    <button type="button" className="text-primary hover:underline" onClick={handleSendOtp}>
+                      Resend code
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="mt-4 text-center">
+                <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={() => { setOtpStep(false); setOtpSent(false); setOtpCode(""); }}>
+                  Back to login
+                </button>
+              </div>
+            </Card>
+          ) : (
+            <Card className="p-8 border-border/50 shadow-xl shadow-black/5 rounded-2xl">
+              <Form {...form}>
+                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                  <FormField
+                    control={form.control}
+                    name="email"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="font-semibold">Work Email</FormLabel>
+                        <FormControl>
                           <Input 
-                            type={showPassword ? "text" : "password"}
-                            placeholder="••••••••" 
-                            className="h-12 rounded-xl bg-slate-50 border-slate-200 focus:bg-white transition-colors pr-12" 
+                            placeholder="name@organization.gov.sa" 
+                            className="h-12 rounded-xl bg-slate-50 border-slate-200 focus:bg-white transition-colors" 
                             {...field} 
                           />
-                          <button
-                            type="button"
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                            onClick={() => setShowPassword(!showPassword)}
-                            tabIndex={-1}
-                          >
-                            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                          </button>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <div className="flex items-center justify-between">
+                          <FormLabel className="font-semibold">Password</FormLabel>
+                          <Link href="/forgot-password" className="text-sm font-medium text-primary hover:underline">Forgot password?</Link>
                         </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <Button 
-                  type="submit" 
-                  className="w-full h-12 rounded-xl text-base font-semibold group bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all"
-                  disabled={loginMutation.isPending}
-                >
-                  {loginMutation.isPending ? (
-                    <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  ) : (
-                    <>
-                      Sign In
-                      <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-                    </>
-                  )}
-                </Button>
-              </form>
-            </Form>
-          </Card>
+                        <FormControl>
+                          <div className="relative">
+                            <Input 
+                              type={showPassword ? "text" : "password"}
+                              placeholder="••••••••" 
+                              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus:bg-white transition-colors pr-12" 
+                              {...field} 
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                              onClick={() => setShowPassword(!showPassword)}
+                              tabIndex={-1}
+                            >
+                              {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                            </button>
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <Button 
+                    type="submit" 
+                    className="w-full h-12 rounded-xl text-base font-semibold group bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all"
+                    disabled={isSubmitting}
+                  >
+                    {isSubmitting ? (
+                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                    ) : (
+                      <>
+                        Sign In
+                        <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </Form>
+            </Card>
+          )}
           <p className="text-center text-sm text-muted-foreground">
             Protected by Replit Platform. <a href="#" className="underline">Privacy Policy</a>
           </p>

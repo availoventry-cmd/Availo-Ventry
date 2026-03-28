@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, Building2 } from "lucide-react";
+import { CheckCircle2, Building2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 const bookingSchema = z.object({
@@ -30,6 +30,11 @@ export default function PublicBooking() {
   const { toast } = useToast();
   const [isSuccess, setIsSuccess] = useState(false);
   const [trackingToken, setTrackingToken] = useState<string | null>(null);
+  const [otpStep, setOtpStep] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [otpPhone, setOtpPhone] = useState("");
+  const [challengeId, setChallengeId] = useState("");
 
   const { data: org, isLoading: orgLoading } = useGetPublicOrgInfo(slug);
   const submitMutation = useSubmitPublicVisitRequest();
@@ -53,7 +58,24 @@ export default function PublicBooking() {
     try {
       const result = await submitMutation.mutateAsync({ slug, data });
       setTrackingToken((result as any)?.trackingToken || null);
-      setIsSuccess(true);
+      setOtpPhone(data.phone);
+
+      try {
+        const otpRes = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ method: "sms", phone: data.phone, visitorId: (result as any)?.visitorId }),
+        });
+        const otpData = await otpRes.json();
+        if (otpData.success) {
+          setChallengeId(otpData.challengeId);
+          setOtpStep(true);
+        } else {
+          setIsSuccess(true);
+        }
+      } catch {
+        setIsSuccess(true);
+      }
     } catch (e) {
       toast({ title: "Submission Failed", description: "Please try again later.", variant: "destructive" });
     }
@@ -61,6 +83,73 @@ export default function PublicBooking() {
 
   if (orgLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50">Loading...</div>;
   if (!org) return <div className="min-h-screen flex items-center justify-center bg-slate-50">Organization not found</div>;
+
+  if (otpStep && !isSuccess) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
+        <Card className="w-full max-w-md p-8 text-center border-border/50 shadow-xl rounded-3xl animate-in-slide">
+          <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <ShieldCheck className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-display font-bold text-foreground mb-2">Verify Your Phone</h2>
+          <p className="text-muted-foreground mb-6">Enter the verification code sent to your phone number.</p>
+          <Input
+            className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50 border-slate-200 mb-4"
+            placeholder="000000"
+            maxLength={6}
+            value={otpCode}
+            onChange={e => setOtpCode(e.target.value.replace(/\D/g, ""))}
+            autoFocus
+          />
+          <Button
+            className="w-full h-12 rounded-xl text-base font-semibold mb-3"
+            disabled={verifying || otpCode.length < 4}
+            onClick={async () => {
+              setVerifying(true);
+              try {
+                const res = await fetch(`${import.meta.env.BASE_URL}api/verification/verify-otp`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ challengeId, otp: otpCode }),
+                });
+                const data = await res.json();
+                if (data.verified) {
+                  setIsSuccess(true);
+                } else {
+                  toast({ title: "Incorrect Code", description: "Please try again.", variant: "destructive" });
+                }
+              } catch {
+                toast({ title: "Verification failed", variant: "destructive" });
+              } finally {
+                setVerifying(false);
+              }
+            }}
+          >
+            {verifying ? "Verifying..." : "Verify Phone"}
+          </Button>
+          <div className="flex justify-between text-sm">
+            <button type="button" className="text-primary hover:underline" onClick={async () => {
+              try {
+                const r = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ method: "sms", phone: otpPhone }),
+                });
+                const d = await r.json();
+                if (d.challengeId) setChallengeId(d.challengeId);
+                toast({ title: "Code Resent" });
+              } catch {
+                toast({ title: "Failed to resend", variant: "destructive" });
+              }
+            }}>Resend Code</button>
+            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setIsSuccess(true)}>
+              Skip
+            </button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   if (isSuccess) {
     return (

@@ -85,6 +85,98 @@ router.post("/login", async (req, res) => {
       }
     }
 
+    let orgRequiresOtp = false;
+    let orgForOtp = null as typeof organizationsTable.$inferSelect | null;
+    if (user.orgId && user.role !== "super_admin") {
+      const [orgRow] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
+      orgForOtp = orgRow || null;
+      if (orgForOtp && orgForOtp.otpEnabled && orgForOtp.verificationPolicy !== "none") {
+        orgRequiresOtp = true;
+      }
+    }
+
+    if (user.twoFactorEnabled || orgRequiresOtp) {
+      const loginToken = generateToken(32);
+
+      const { pendingLogins } = await import("./auth-pending.js");
+      pendingLogins.set(loginToken, {
+        userId: user.id,
+        phone: user.phone,
+        email: user.email,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      });
+
+      res.json({
+        requires2FA: true,
+        loginToken,
+        phone: user.phone ? user.phone.replace(/(.{4}).+(.{2})/, '$1****$2') : null,
+        email: user.email ? user.email.replace(/(.{2}).+(@.+)/, '$1***$2') : null,
+        userName: user.name,
+        channels: ["sms", "whatsapp", "email"].filter(c => {
+          if (c === "email") return !!user.email;
+          return !!user.phone;
+        }),
+      });
+      return;
+    }
+
+    await db.update(usersTable)
+      .set({ lastLoginAt: new Date(), lastActiveAt: new Date(), loginCount: (user.loginCount || 0) + 1 })
+      .where(eq(usersTable.id, user.id));
+
+    (req as unknown as { session: { userId: string; save: (cb: (err: unknown) => void) => void } }).session.userId = user.id;
+
+    let orgInfo = orgForOtp;
+    if (!orgInfo && user.orgId) {
+      const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.orgId)).limit(1);
+      if (orgs[0]) orgInfo = orgs[0];
+    }
+
+    res.json({ user: await buildUserResponse(user, orgInfo) });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// POST /api/auth/verify-login-otp
+router.post("/verify-login-otp", async (req, res) => {
+  try {
+    const { loginToken, phone, email, otp } = req.body;
+    if (!loginToken || !otp) {
+      res.status(400).json({ error: "loginToken and otp are required" });
+      return;
+    }
+
+    const { pendingLogins } = await import("./auth-pending.js");
+    const pending = pendingLogins.get(loginToken);
+    if (!pending || pending.expiresAt < new Date()) {
+      pendingLogins.delete(loginToken);
+      res.status(400).json({ error: "Login session expired. Please log in again." });
+      return;
+    }
+
+    const { verifyOtp } = await import("../lib/authentica.js");
+    const result = await verifyOtp({
+      phone: pending.phone || undefined,
+      email: pending.email || undefined,
+      otp: otp.trim(),
+    });
+
+    if (!result.status) {
+      res.status(400).json({ error: "Incorrect OTP. Please try again.", message: result.message });
+      return;
+    }
+
+    pendingLogins.delete(loginToken);
+    const userId = pending.userId;
+    const users = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    const user = users[0];
+    if (!user) {
+      res.status(400).json({ error: "User not found" });
+      return;
+    }
+
     await db.update(usersTable)
       .set({ lastLoginAt: new Date(), lastActiveAt: new Date(), loginCount: (user.loginCount || 0) + 1 })
       .where(eq(usersTable.id, user.id));
@@ -99,7 +191,7 @@ router.post("/login", async (req, res) => {
 
     res.json({ user: await buildUserResponse(user, orgInfo) });
   } catch (err) {
-    console.error("Login error:", err);
+    console.error("Verify login OTP error:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });

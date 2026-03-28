@@ -1,0 +1,57 @@
+Fix two critical issues with the public visitor booking flow in artifacts/ventry/src/pages/public/booking.tsx:
+
+ISSUE 1: Runtime error after submitting walk-in request. The OTP code has a bug causing a crash.
+
+ISSUE 2: The flow is wrong. Currently the visit request is created BEFORE OTP verification, which means unverified visitors can spam the system. The OTP should happen FIRST, then the request is created only after successful verification.
+
+THE CORRECT FLOW SHOULD BE:
+1. Visitor fills the form and clicks "Request Entry Pass"
+2. Instead of creating the request, send OTP to visitor's phone first
+3. Show OTP verification screen (with channel choice: SMS, WhatsApp, Email)
+4. Visitor enters the code and verifies
+5. ONLY AFTER OTP is verified, create the visit request (call submitMutation)
+6. THEN Telegram notifications are sent (backend handles this automatically)
+7. Show success screen with tracking link
+
+If visitor clicks "Skip" — do NOT create the request. Show a message: "Phone verification is required to submit a visit request."
+
+FIX THE FLOW in booking.tsx:
+
+1. When form is submitted (onSubmit), do NOT call submitMutation yet. Instead:
+   - Save the form data in state
+   - Show OTP channel selection screen (SMS, WhatsApp, Email)
+   - Send OTP to visitor's phone via POST /api/verification/send-otp
+
+2. After OTP is verified via POST /api/verification/verify-otp:
+   - THEN call submitMutation with the saved form data
+   - Show success screen with tracking link
+
+3. Remove the "Skip" option — OTP verification is mandatory
+
+4. Add channel selection like the login page: three buttons for SMS, WhatsApp, Email. Default to SMS.
+
+5. Make sure all imports are correct — import ShieldCheck and Loader2 from lucide-react.
+
+6. The OTP verification screen should show:
+   - "Verify Your Identity" title
+   - Channel selection buttons (SMS / WhatsApp / Email)  
+   - "Send Code" button
+   - After sending: 6-digit code input field
+   - "Verify & Submit Request" button
+   - "Resend Code" and "Change method" links
+   - "← Back to form" link to go back and edit
+
+7. Store these states:
+   - pendingFormData: the form data waiting for OTP verification
+   - otpStep: boolean
+   - otpChannel: "sms" | "whatsapp" | "email"
+   - otpSent: boolean
+   - otpCode: string
+   - otpPhone: string
+   - otpEmail: string
+   - verifying: boolean
+   - sendingOtp: boolean
+
+Apply the same flow change to the login page if not already done — OTP must be verified before creating the session.
+
+Also make sure the same OTP-first flow applies: for the employee "Invite a Visitor" page (artifacts/ventry/src/pages/host/new.tsx), do NOT add OTP — employees are already authenticated. OTP is only for public visitors and login.

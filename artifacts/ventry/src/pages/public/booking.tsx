@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, Building2, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Building2, ShieldCheck, Loader2 } from "lucide-react";
 import { useState } from "react";
 
 const bookingSchema = z.object({
@@ -25,21 +25,30 @@ const bookingSchema = z.object({
   scheduledTimeFrom: z.string().optional(),
 });
 
+type BookingFormData = z.infer<typeof bookingSchema>;
+
 export default function PublicBooking() {
   const { slug } = useParams<{ slug: string }>();
   const { toast } = useToast();
   const [isSuccess, setIsSuccess] = useState(false);
   const [trackingToken, setTrackingToken] = useState<string | null>(null);
+
+  const [pendingFormData, setPendingFormData] = useState<BookingFormData | null>(null);
   const [otpStep, setOtpStep] = useState(false);
+  const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("sms");
+  const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
-  const [verifying, setVerifying] = useState(false);
   const [otpPhone, setOtpPhone] = useState("");
+  const [otpEmail, setOtpEmail] = useState("");
   const [challengeId, setChallengeId] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const { data: org, isLoading: orgLoading } = useGetPublicOrgInfo(slug);
   const submitMutation = useSubmitPublicVisitRequest();
 
-  const form = useForm<z.infer<typeof bookingSchema>>({
+  const form = useForm<BookingFormData>({
     resolver: zodResolver(bookingSchema),
     defaultValues: {
       visitorName: "",
@@ -54,30 +63,90 @@ export default function PublicBooking() {
     },
   });
 
-  const onSubmit = async (data: z.infer<typeof bookingSchema>) => {
-    try {
-      const result = await submitMutation.mutateAsync({ slug, data });
-      setTrackingToken((result as any)?.trackingToken || null);
-      setOtpPhone(data.phone);
+  const onSubmit = async (data: BookingFormData) => {
+    setPendingFormData(data);
+    setOtpPhone(data.phone);
+    setOtpEmail(data.email);
+    setOtpStep(true);
+  };
 
-      try {
-        const otpRes = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ method: "sms", phone: data.phone, visitorId: (result as any)?.visitorId }),
-        });
-        const otpData = await otpRes.json();
-        if (otpData.success) {
-          setChallengeId(otpData.challengeId);
-          setOtpStep(true);
-        } else {
-          setIsSuccess(true);
-        }
-      } catch {
-        setIsSuccess(true);
+  const handleSendOtp = async () => {
+    setSendingOtp(true);
+    try {
+      const body: Record<string, string> = { method: otpChannel };
+      if (otpChannel === "email") {
+        body.email = otpEmail;
+      } else {
+        body.phone = otpPhone;
       }
-    } catch (e) {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setChallengeId(data.challengeId);
+        setOtpSent(true);
+        toast({ title: "Code Sent", description: `Verification code sent via ${otpChannel.toUpperCase()}.` });
+      } else {
+        toast({ title: "Failed", description: data.error || "Could not send code. Try again.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to send code", variant: "destructive" });
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleVerifyAndSubmit = async () => {
+    if (!pendingFormData) return;
+    setVerifying(true);
+    try {
+      const verifyRes = await fetch(`${import.meta.env.BASE_URL}api/verification/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId, otp: otpCode }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyData.verified) {
+        toast({ title: "Incorrect Code", description: verifyData.message || "Please try again.", variant: "destructive" });
+        return;
+      }
+
+      setSubmitting(true);
+      const result = await submitMutation.mutateAsync({ slug, data: pendingFormData });
+      setTrackingToken((result as any)?.trackingToken || null);
+      setIsSuccess(true);
+    } catch {
       toast({ title: "Submission Failed", description: "Please try again later.", variant: "destructive" });
+    } finally {
+      setVerifying(false);
+      setSubmitting(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setSendingOtp(true);
+    try {
+      const body: Record<string, string> = { method: otpChannel };
+      if (otpChannel === "email") {
+        body.email = otpEmail;
+      } else {
+        body.phone = otpPhone;
+      }
+      const res = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.challengeId) setChallengeId(data.challengeId);
+      toast({ title: "Code Resent" });
+    } catch {
+      toast({ title: "Failed to resend", variant: "destructive" });
+    } finally {
+      setSendingOtp(false);
     }
   };
 
@@ -87,63 +156,82 @@ export default function PublicBooking() {
   if (otpStep && !isSuccess) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
-        <Card className="w-full max-w-md p-8 text-center border-border/50 shadow-xl rounded-3xl animate-in-slide">
-          <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
-            <ShieldCheck className="w-8 h-8" />
+        <Card className="w-full max-w-md p-8 border-border/50 shadow-xl rounded-3xl animate-in-slide">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <ShieldCheck className="w-8 h-8" />
+            </div>
+            <h2 className="text-2xl font-display font-bold text-foreground">Verify Your Identity</h2>
+            <p className="text-muted-foreground mt-2">We need to verify your identity before submitting the request.</p>
           </div>
-          <h2 className="text-2xl font-display font-bold text-foreground mb-2">Verify Your Phone</h2>
-          <p className="text-muted-foreground mb-6">Enter the verification code sent to your phone number.</p>
-          <Input
-            className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50 border-slate-200 mb-4"
-            placeholder="000000"
-            maxLength={6}
-            value={otpCode}
-            onChange={e => setOtpCode(e.target.value.replace(/\D/g, ""))}
-            autoFocus
-          />
-          <Button
-            className="w-full h-12 rounded-xl text-base font-semibold mb-3"
-            disabled={verifying || otpCode.length < 4}
-            onClick={async () => {
-              setVerifying(true);
-              try {
-                const res = await fetch(`${import.meta.env.BASE_URL}api/verification/verify-otp`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ challengeId, otp: otpCode }),
-                });
-                const data = await res.json();
-                if (data.verified) {
-                  setIsSuccess(true);
-                } else {
-                  toast({ title: "Incorrect Code", description: "Please try again.", variant: "destructive" });
-                }
-              } catch {
-                toast({ title: "Verification failed", variant: "destructive" });
-              } finally {
-                setVerifying(false);
-              }
-            }}
-          >
-            {verifying ? "Verifying..." : "Verify Phone"}
-          </Button>
-          <div className="flex justify-between text-sm">
-            <button type="button" className="text-primary hover:underline" onClick={async () => {
-              try {
-                const r = await fetch(`${import.meta.env.BASE_URL}api/verification/send-otp`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ method: "sms", phone: otpPhone }),
-                });
-                const d = await r.json();
-                if (d.challengeId) setChallengeId(d.challengeId);
-                toast({ title: "Code Resent" });
-              } catch {
-                toast({ title: "Failed to resend", variant: "destructive" });
-              }
-            }}>Resend Code</button>
-            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setIsSuccess(true)}>
-              Skip
+
+          {!otpSent ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground text-center">Choose how to receive your verification code</p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setOtpChannel("sms")}
+                  className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "sms" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+                  SMS
+                </button>
+                <button type="button" onClick={() => setOtpChannel("whatsapp")}
+                  className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "whatsapp" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+                  WhatsApp
+                </button>
+                <button type="button" onClick={() => setOtpChannel("email")}
+                  className={`flex-1 p-3 rounded-xl border text-center text-sm font-medium transition-all ${otpChannel === "email" ? "border-primary bg-primary/5 text-primary" : "border-slate-200"}`}>
+                  Email
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground text-center">
+                Code will be sent to {otpChannel === "email" ? otpEmail : otpPhone}
+              </p>
+              <Button className="w-full h-12 rounded-xl" onClick={handleSendOtp} disabled={sendingOtp}>
+                {sendingOtp ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send Code"}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground text-center">
+                Enter the code sent via {otpChannel.toUpperCase()}
+              </p>
+              <Input
+                className="h-14 rounded-xl text-center text-2xl tracking-[0.5em] font-mono bg-slate-50 border-slate-200"
+                placeholder="000000"
+                maxLength={6}
+                value={otpCode}
+                onChange={e => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                autoFocus
+              />
+              <Button
+                className="w-full h-12 rounded-xl text-base font-semibold"
+                disabled={verifying || submitting || otpCode.length < 4}
+                onClick={handleVerifyAndSubmit}
+              >
+                {verifying || submitting ? (
+                  <><Loader2 className="w-5 h-5 animate-spin mr-2" /> {submitting ? "Submitting..." : "Verifying..."}</>
+                ) : (
+                  "Verify & Submit Request"
+                )}
+              </Button>
+              <div className="flex justify-between text-xs">
+                <button type="button" className="text-primary hover:underline" onClick={() => { setOtpSent(false); setOtpCode(""); }}>
+                  Change method
+                </button>
+                <button type="button" className="text-primary hover:underline" onClick={handleResendOtp} disabled={sendingOtp}>
+                  {sendingOtp ? "Sending..." : "Resend code"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 text-center">
+            <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={() => {
+              setOtpStep(false);
+              setOtpSent(false);
+              setOtpCode("");
+              setChallengeId("");
+            }}>
+              Back to form
             </button>
           </div>
         </Card>
@@ -291,9 +379,8 @@ export default function PublicBooking() {
                 <Button
                   type="submit"
                   className="w-full h-14 rounded-xl text-lg font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all hover-elevate"
-                  disabled={submitMutation.isPending}
                 >
-                  {submitMutation.isPending ? "Submitting..." : "Request Entry Pass"}
+                  Request Entry Pass
                 </Button>
               </div>
             </form>

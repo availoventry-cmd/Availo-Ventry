@@ -4,8 +4,8 @@ import { eq, and, sql } from "drizzle-orm";
 import { requireAuth, requireOrgAccess, requirePermission } from "../lib/auth.js";
 import { generateId, generateQrCode, generateToken } from "../lib/id.js";
 import { addHours } from "../lib/dateUtils.js";
-import { notifyVisitApproved, notifyCheckIn, notifyRejection } from "../lib/notifyTelegram.js";
-import { sendEmail, buildVisitApprovedEmail, getBaseUrl } from "../lib/email.js";
+import { notifyVisitApproved, notifyCheckIn, notifyRejection, notifyPreRegistered } from "../lib/notifyTelegram.js";
+import { sendEmail, buildVisitApprovedEmail, buildVisitRejectedEmail, getBaseUrl } from "../lib/email.js";
 
 const router = Router({ mergeParams: true });
 
@@ -163,6 +163,21 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
     const requests = await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1);
     const enriched = await enrichRequest(requests[0]);
     res.status(201).json(enriched);
+
+    if (enriched.visitor && enriched.branch) {
+      const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      notifyPreRegistered({
+        visitorName: enriched.visitor.fullName,
+        purpose: enriched.purpose,
+        branchName: enriched.branch.name,
+        orgName: org?.name || "",
+        hostName: enriched.hostUser?.name || req.user!.name,
+        scheduledDate: enriched.scheduledDate,
+        scheduledTimeFrom: enriched.scheduledTimeFrom,
+        requestId: enriched.id,
+        orgId,
+      }).catch(console.error);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Internal Server Error" });
@@ -278,6 +293,19 @@ router.patch("/:requestId/reject", requireAuth, requireOrgAccess, requirePermiss
         hostUserId: enriched.hostUserId,
         orgId,
       }).catch(console.error);
+
+      if (enriched.visitor.email) {
+        const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+        sendEmail({
+          to: enriched.visitor.email,
+          subject: `Your visit request to ${org?.name || "the organization"} was declined`,
+          html: buildVisitRejectedEmail({
+            visitorName: enriched.visitor.fullName,
+            organizationName: org?.name || "the organization",
+            rejectionReason: enriched.rejectionReason || undefined,
+          }),
+        }).catch(console.error);
+      }
     }
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error" });

@@ -119,9 +119,49 @@ export async function notifyWalkIn(data: {
     requestId: data.requestId,
   });
 
+  const buttons = [[
+    { text: "✅ Approve", callback_data: `approve_${data.requestId}` },
+    { text: "❌ Reject", callback_data: `reject_${data.requestId}` },
+  ]];
+
   const orgSubs = await getSubscribersForOrg(data.orgId, "notifyWalkIns");
   await Promise.allSettled(orgSubs.map(sub =>
-    TG.sendTelegramMessage(sub.chatId, message)
+    TG.sendTelegramMessageWithButtons(sub.chatId, message, buttons)
+  ));
+}
+
+export async function notifyPreRegistered(data: {
+  visitorName: string;
+  purpose: string;
+  branchName: string;
+  orgName: string;
+  hostName: string;
+  scheduledDate: string;
+  scheduledTimeFrom?: string | null;
+  requestId: string;
+  orgId: string;
+}) {
+  if (!TG.isConfigured()) return;
+
+  const message = TG.formatPreRegisteredRequest({
+    visitorName: data.visitorName,
+    purpose: data.purpose,
+    branchName: data.branchName,
+    orgName: data.orgName,
+    hostName: data.hostName,
+    scheduledDate: data.scheduledDate,
+    scheduledTimeFrom: data.scheduledTimeFrom || undefined,
+    requestId: data.requestId,
+  });
+
+  const buttons = [[
+    { text: "✅ Approve", callback_data: `approve_${data.requestId}` },
+    { text: "❌ Reject", callback_data: `reject_${data.requestId}` },
+  ]];
+
+  const orgSubs = await getSubscribersForOrg(data.orgId, "notifyWalkIns");
+  await Promise.allSettled(orgSubs.map(sub =>
+    TG.sendTelegramMessageWithButtons(sub.chatId, message, buttons)
   ));
 }
 

@@ -166,10 +166,47 @@ export function buildVisitApprovedEmail({
             <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrCode)}" alt="QR Code" style="width: 180px; height: 180px; border-radius: 12px; border: 2px solid #e2e8f0;" />
           </div>
           <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; text-align: center; margin: 16px 0 0;">
-            <p style="margin: 0 0 4px; color: #94a3b8; font-size: 12px;">Manual Entry Code (if camera unavailable)</p>
+            <p style="margin: 0 0 4px; color: #94a3b8; font-size: 12px;">Manual Entry Code</p>
             <p style="margin: 0; font-family: 'Courier New', monospace; font-size: 18px; font-weight: 700; color: #1e293b; letter-spacing: 2px;">${qrCode}</p>
           </div>
           ` : ""}
+        </div>
+        <div style="background: #f8fafc; padding: 16px 32px; text-align: center; border-top: 1px solid #e2e8f0;">
+          <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; ${new Date().getFullYear()} Availo Ventry &mdash; Powered by T2</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+export function buildVisitRejectedEmail({
+  visitorName, organizationName, rejectionReason,
+}: {
+  visitorName: string; organizationName: string; rejectionReason?: string;
+}): string {
+  return `
+    <!DOCTYPE html>
+    <html dir="ltr" lang="en">
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 40px 20px;">
+      <div style="max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+        <div style="background: linear-gradient(135deg, #dc2626, #ef4444); padding: 32px; text-align: center;">
+          <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700;">Visit Request Update</h1>
+        </div>
+        <div style="padding: 32px;">
+          <h2 style="color: #1e293b; margin: 0 0 8px; font-size: 20px;">Hello ${visitorName},</h2>
+          <p style="color: #475569; line-height: 1.6; margin: 0 0 20px;">
+            Unfortunately, your visit request to <strong>${organizationName}</strong> could not be approved at this time.
+          </p>
+          ${rejectionReason ? `
+          <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 16px; margin: 0 0 20px;">
+            <p style="margin: 0; color: #991b1b; font-weight: 600;">Reason: ${rejectionReason}</p>
+          </div>
+          ` : ""}
+          <p style="color: #475569; line-height: 1.6; margin: 0;">
+            You may submit a new request or contact the organization directly for more information.
+          </p>
         </div>
         <div style="background: #f8fafc; padding: 16px 32px; text-align: center; border-top: 1px solid #e2e8f0;">
           <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; ${new Date().getFullYear()} Availo Ventry &mdash; Powered by T2</p>

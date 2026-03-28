@@ -114,7 +114,152 @@ router.post("/webhook", async (req, res) => {
   // Respond immediately — Telegram requires 2xx within 3 seconds
   res.sendStatus(200);
 
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const headerToken = req.headers["x-telegram-bot-api-secret-token"];
+    if (headerToken !== webhookSecret) return;
+  }
+
   const update = req.body;
+
+  const callbackQuery = update?.callback_query;
+  if (callbackQuery) {
+    const cbChatId = callbackQuery.message?.chat?.id;
+    const cbMessageId = callbackQuery.message?.message_id;
+    const cbData = callbackQuery.data as string;
+    const cbQueryId = callbackQuery.id;
+
+    if (!cbChatId || !cbData) return;
+
+    await TG.answerCallbackQuery(cbQueryId);
+
+    const subs = await db.select().from(telegramSubscriptionsTable)
+      .where(and(eq(telegramSubscriptionsTable.chatId, cbChatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+      .limit(1);
+    if (!subs[0]) {
+      await TG.editMessageText(cbChatId, cbMessageId, "❌ Your account is not linked. Send /link CODE first.");
+      return;
+    }
+
+    const userId = subs[0].userId;
+    const cbUser = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+    if (!cbUser) return;
+
+    const userPerms = await loadPermissions(cbUser.role, cbUser.roleId);
+    if (!userPerms.includes("visit_requests.approve")) {
+      await TG.editMessageText(cbChatId, cbMessageId, "❌ You don't have permission to approve/reject visit requests.");
+      return;
+    }
+
+    if (cbData.startsWith("approve_")) {
+      const requestId = cbData.replace("approve_", "");
+      const request = (await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1))[0];
+
+      if (!request || request.status !== "pending") {
+        await TG.editMessageText(cbChatId, cbMessageId, "❌ Request not found or already processed.");
+        return;
+      }
+
+      if (request.orgId !== cbUser.orgId) {
+        await TG.editMessageText(cbChatId, cbMessageId, "❌ This request does not belong to your organization.");
+        return;
+      }
+
+      if (cbUser.branchId && request.branchId !== cbUser.branchId) {
+        await TG.editMessageText(cbChatId, cbMessageId, "❌ This request is not in your assigned branch.");
+        return;
+      }
+
+      const { generateQrCode, generateToken } = await import("../lib/id.js");
+      const { addHours } = await import("../lib/dateUtils.js");
+      const qrCode = request.qrCode || generateQrCode();
+      const trackingToken = request.trackingToken || generateToken(16);
+
+      await db.update(visitRequestsTable).set({
+        status: "approved", approvedById: userId, approvedAt: new Date(),
+        approvalMethod: "telegram", qrCode, qrExpiresAt: addHours(new Date(), 24), trackingToken,
+      }).where(eq(visitRequestsTable.id, requestId));
+
+      const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+      await TG.editMessageText(cbChatId, cbMessageId,
+        `<b>✅ Approved by ${cbUser.name}</b>\n\n` +
+        `👤 ${visitor?.fullName || "Unknown"}\n` +
+        `📋 ${request.purpose}\n` +
+        `📅 ${request.scheduledDate}\n\n` +
+        `🎫 QR: <code>${qrCode}</code>`
+      );
+
+      if (visitor?.email) {
+        try {
+          const { sendEmail, buildVisitApprovedEmail } = await import("../lib/email.js");
+          const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
+          const baseUrl = process.env.APP_URL || process.env.APP_BASE_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "");
+          await sendEmail({
+            to: visitor.email,
+            subject: `Your visit to ${org?.name || "the organization"} has been approved`,
+            html: buildVisitApprovedEmail({
+              visitorName: visitor.fullName, organizationName: org?.name || "the organization",
+              scheduledDate: request.scheduledDate, scheduledTime: request.scheduledTimeFrom || undefined,
+              passLink: `${baseUrl}/public/pass/${trackingToken}`, qrCode,
+            }),
+          });
+        } catch (e) { console.error("Email after Telegram approve:", e); }
+      }
+      return;
+    }
+
+    if (cbData.startsWith("reject_")) {
+      const requestId = cbData.replace("reject_", "");
+      const request = (await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1))[0];
+
+      if (!request || request.status !== "pending") {
+        await TG.editMessageText(cbChatId, cbMessageId, "❌ Request not found or already processed.");
+        return;
+      }
+
+      if (request.orgId !== cbUser.orgId) {
+        await TG.editMessageText(cbChatId, cbMessageId, "❌ This request does not belong to your organization.");
+        return;
+      }
+
+      if (cbUser.branchId && request.branchId !== cbUser.branchId) {
+        await TG.editMessageText(cbChatId, cbMessageId, "❌ This request is not in your assigned branch.");
+        return;
+      }
+
+      await db.update(visitRequestsTable).set({
+        status: "rejected", approvedById: userId, approvedAt: new Date(), rejectionReason: "Rejected via Telegram",
+      }).where(eq(visitRequestsTable.id, requestId));
+
+      const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+      await TG.editMessageText(cbChatId, cbMessageId,
+        `<b>❌ Rejected by ${cbUser.name}</b>\n\n` +
+        `👤 ${visitor?.fullName || "Unknown"}\n` +
+        `📋 ${request.purpose}`
+      );
+
+      if (visitor?.email) {
+        try {
+          const { sendEmail, buildVisitRejectedEmail } = await import("../lib/email.js");
+          const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
+          sendEmail({
+            to: visitor.email,
+            subject: `Your visit request to ${org?.name || "the organization"} was declined`,
+            html: buildVisitRejectedEmail({
+              visitorName: visitor.fullName, organizationName: org?.name || "the organization",
+              rejectionReason: "Rejected via Telegram",
+            }),
+          }).catch(console.error);
+        } catch (e) { console.error("Email after Telegram reject:", e); }
+      }
+      return;
+    }
+
+    return;
+  }
+
   const message = update?.message;
   if (!message?.text) return;
 
@@ -197,6 +342,7 @@ router.post("/webhook", async (req, res) => {
       `<b>Ventry Bot Commands</b>\n\n` +
       `/start — Welcome message\n` +
       `/link CODE — Link your Ventry account\n` +
+      `/pending — View and manage pending requests\n` +
       `/status — Check your notification settings\n` +
       `/unlink — Disconnect your account\n` +
       `/help — Show this message`
@@ -226,6 +372,67 @@ router.post("/webhook", async (req, res) => {
       `✅ Rejections: ${sub.notifyRejections ? 'On' : 'Off'}\n\n` +
       `Manage settings in your Ventry portal → Notifications → Telegram.`
     );
+    return;
+  }
+
+  // /pending — List pending visit requests
+  if (text === "/pending") {
+    const subs = await db.select().from(telegramSubscriptionsTable)
+      .where(and(eq(telegramSubscriptionsTable.chatId, chatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+      .limit(1);
+    if (!subs[0]) {
+      await TG.sendTelegramMessage(chatId, "❌ No linked account. Send /link CODE first.");
+      return;
+    }
+
+    const userId = subs[0].userId;
+    const pendingUser = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+    if (!pendingUser || !pendingUser.orgId) {
+      await TG.sendTelegramMessage(chatId, "❌ User not found.");
+      return;
+    }
+
+    const pendingPerms = await loadPermissions(pendingUser.role, pendingUser.roleId);
+    if (!pendingPerms.includes("visit_requests.approve")) {
+      await TG.sendTelegramMessage(chatId, "❌ You don't have permission to manage visit requests.");
+      return;
+    }
+
+    let pending = await db.select().from(visitRequestsTable)
+      .where(and(eq(visitRequestsTable.orgId, pendingUser.orgId), eq(visitRequestsTable.status, "pending")));
+
+    if (pendingUser.branchId) {
+      pending = pending.filter(r => r.branchId === pendingUser.branchId);
+    }
+
+    if (pending.length === 0) {
+      await TG.sendTelegramMessage(chatId, "✅ No pending visit requests. All clear!");
+      return;
+    }
+
+    for (const r of pending.slice(0, 10)) {
+      const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, r.visitorId)).limit(1))[0];
+      const [branch] = r.branchId ? await db.select().from(branchesTable).where(eq(branchesTable.id, r.branchId)).limit(1) : [null];
+
+      const msg = `<b>⏳ Pending Request</b>\n\n` +
+        `👤 <b>${visitor?.fullName || "Unknown"}</b>\n` +
+        `📋 ${r.purpose}\n` +
+        `🏢 ${branch?.name || "—"}\n` +
+        `📅 ${r.scheduledDate}` +
+        (r.scheduledTimeFrom ? ` at ${r.scheduledTimeFrom}` : "") +
+        `\n📝 Type: ${r.type.replace("_", " ")}`;
+
+      const buttons = [[
+        { text: "✅ Approve", callback_data: `approve_${r.id}` },
+        { text: "❌ Reject", callback_data: `reject_${r.id}` },
+      ]];
+
+      await TG.sendTelegramMessageWithButtons(chatId, msg, buttons);
+    }
+
+    if (pending.length > 10) {
+      await TG.sendTelegramMessage(chatId, `... and ${pending.length - 10} more. Check the portal for the full list.`);
+    }
     return;
   }
 
@@ -399,7 +606,8 @@ router.post("/setup-webhook", requireAuth, requireRole("super_admin"), async (re
     return;
   }
 
-  const result = await TG.setBotWebhook(webhookUrl);
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  const result = await TG.setBotWebhook(webhookUrl, secret);
   res.json({ success: result.ok, description: result.description });
 });
 

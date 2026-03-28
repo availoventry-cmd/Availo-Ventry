@@ -39,11 +39,47 @@ export async function sendTelegramMessage(chatId: string | number, text: string,
   });
 }
 
-export async function setBotWebhook(webhookUrl: string): Promise<TelegramResponse> {
-  return callTelegram("setWebhook", {
+export async function sendTelegramMessageWithButtons(
+  chatId: string | number,
+  text: string,
+  buttons: Array<Array<{ text: string; callback_data: string }>>,
+  parseMode: "HTML" | "Markdown" = "HTML"
+): Promise<TelegramResponse> {
+  return callTelegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: parseMode,
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: buttons,
+    },
+  });
+}
+
+export async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<TelegramResponse> {
+  return callTelegram("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text: text || "",
+  });
+}
+
+export async function editMessageText(chatId: string | number, messageId: number, text: string, parseMode: "HTML" | "Markdown" = "HTML"): Promise<TelegramResponse> {
+  return callTelegram("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: parseMode,
+    disable_web_page_preview: true,
+  });
+}
+
+export async function setBotWebhook(webhookUrl: string, secretToken?: string): Promise<TelegramResponse> {
+  const body: Record<string, unknown> = {
     url: webhookUrl,
     drop_pending_updates: true,
-  });
+  };
+  if (secretToken) body.secret_token = secretToken;
+  return callTelegram("setWebhook", body);
 }
 
 export async function deleteBotWebhook(): Promise<TelegramResponse> {
@@ -100,8 +136,26 @@ export function formatWalkInRequest(data: {
   return `<b>🔔 New Walk-in Request</b>\n\n` +
     `👤 <b>${data.visitorName}</b>\n` +
     `📋 ${data.purpose}\n` +
-    `🏢 ${data.branchName} — ${data.orgName}\n\n` +
-    `Reply /approve_${data.requestId.slice(0, 8)} or /reject_${data.requestId.slice(0, 8)}`;
+    `🏢 ${data.branchName} — ${data.orgName}`;
+}
+
+export function formatPreRegisteredRequest(data: {
+  visitorName: string;
+  purpose: string;
+  branchName: string;
+  orgName: string;
+  hostName: string;
+  scheduledDate: string;
+  scheduledTimeFrom?: string;
+  requestId: string;
+}): string {
+  return `<b>📋 New Pre-Registered Visit</b>\n\n` +
+    `👤 <b>${data.visitorName}</b>\n` +
+    `📋 ${data.purpose}\n` +
+    `🏢 ${data.branchName} — ${data.orgName}\n` +
+    `👥 Host: ${data.hostName}\n` +
+    `📅 ${data.scheduledDate}` +
+    (data.scheduledTimeFrom ? ` at ${data.scheduledTimeFrom}` : "");
 }
 
 export function formatVisitRejected(data: {

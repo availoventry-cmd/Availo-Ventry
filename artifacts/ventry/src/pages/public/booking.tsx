@@ -29,6 +29,7 @@ export default function PublicBooking() {
   const { slug } = useParams<{ slug: string }>();
   const { toast } = useToast();
   const [isSuccess, setIsSuccess] = useState(false);
+  const [trackingToken, setTrackingToken] = useState<string | null>(null);
 
   const { data: org, isLoading: orgLoading } = useGetPublicOrgInfo(slug);
   const submitMutation = useSubmitPublicVisitRequest();
@@ -50,7 +51,8 @@ export default function PublicBooking() {
 
   const onSubmit = async (data: z.infer<typeof bookingSchema>) => {
     try {
-      await submitMutation.mutateAsync({ slug, data });
+      const result = await submitMutation.mutateAsync({ slug, data });
+      setTrackingToken((result as any)?.trackingToken || null);
       setIsSuccess(true);
     } catch (e) {
       toast({ title: "Submission Failed", description: "Please try again later.", variant: "destructive" });
@@ -68,9 +70,18 @@ export default function PublicBooking() {
             <CheckCircle2 className="w-10 h-10" />
           </div>
           <h2 className="text-3xl font-display font-bold text-foreground mb-3">Request Submitted</h2>
-          <p className="text-muted-foreground text-lg mb-8">
-            Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an email at your provided address with your entry pass and QR code once approved.
+          <p className="text-muted-foreground text-lg mb-6">
+            Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an email with your entry pass and QR code once approved.
           </p>
+          {trackingToken && (
+            <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 mb-6 text-left">
+              <p className="text-sm font-semibold text-blue-900 mb-2">Track your request:</p>
+              <a href={`/public/pass/${trackingToken}`} className="text-sm text-blue-600 hover:underline break-all">
+                {window.location.origin}/public/pass/{trackingToken}
+              </a>
+              <p className="text-xs text-blue-500 mt-2">Bookmark this link to check your request status anytime.</p>
+            </div>
+          )}
           <Button onClick={() => window.location.reload()} variant="outline" className="h-12 px-8 rounded-xl font-semibold hover-elevate">
             Submit Another Request
           </Button>

@@ -1,0 +1,582 @@
+# Full Notification Cycle + Telegram Inline Buttons + Email/Telegram for All Events
+
+## IMPORTANT CONSTRAINTS
+- Do NOT break existing flows.
+- Do NOT recreate files — only modify existing ones.
+- Keep all existing Telegram commands (/start, /link, /help, /status, /unlink) working.
+
+---
+
+## PART 1: Telegram Inline Buttons for Approve/Reject (replace text commands)
+
+Currently walk-in notifications show: "Reply /approve_a03dea5a or /reject_a03dea5a" which is not user-friendly.
+
+### 1a. Add inline keyboard support to telegram.ts
+
+In `artifacts/api-server/src/lib/telegram.ts`, add a new function for sending messages with inline keyboard buttons:
+
+```typescript
+export async function sendTelegramMessageWithButtons(
+  chatId: string | number,
+  text: string,
+  buttons: Array<Array<{ text: string; callback_data: string }>>,
+  parseMode: "HTML" | "Markdown" = "HTML"
+): Promise<TelegramResponse> {
+  return callTelegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: parseMode,
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: buttons,
+    },
+  });
+}
+
+export async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<TelegramResponse> {
+  return callTelegram("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text: text || "",
+  });
+}
+
+export async function editMessageText(chatId: string | number, messageId: number, text: string, parseMode: "HTML" | "Markdown" = "HTML"): Promise<TelegramResponse> {
+  return callTelegram("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: parseMode,
+    disable_web_page_preview: true,
+  });
+}
+```
+
+### 1b. Update walk-in notification format
+
+In `artifacts/api-server/src/lib/telegram.ts`, update the `formatWalkInRequest` function — remove the "Reply /approve_ or /reject_" text at the bottom since we'll use buttons instead:
+
+```typescript
+export function formatWalkInRequest(data: {
+  visitorName: string;
+  purpose: string;
+  branchName: string;
+  orgName: string;
+  requestId: string;
+}): string {
+  return `<b>🔔 New Walk-in Request</b>\n\n` +
+    `👤 <b>${data.visitorName}</b>\n` +
+    `📋 ${data.purpose}\n` +
+    `🏢 ${data.branchName} — ${data.orgName}`;
+}
+```
+
+Also add a new format function for pre-registered requests:
+
+```typescript
+export function formatPreRegisteredRequest(data: {
+  visitorName: string;
+  purpose: string;
+  branchName: string;
+  orgName: string;
+  hostName: string;
+  scheduledDate: string;
+  scheduledTimeFrom?: string;
+  requestId: string;
+}): string {
+  return `<b>📋 New Pre-Registered Visit</b>\n\n` +
+    `👤 <b>${data.visitorName}</b>\n` +
+    `📋 ${data.purpose}\n` +
+    `🏢 ${data.branchName} — ${data.orgName}\n` +
+    `👥 Host: ${data.hostName}\n` +
+    `📅 ${data.scheduledDate}` +
+    (data.scheduledTimeFrom ? ` at ${data.scheduledTimeFrom}` : "");
+}
+```
+
+### 1c. Update notifyWalkIn to send inline buttons
+
+In `artifacts/api-server/src/lib/notifyTelegram.ts`, update `notifyWalkIn` to use `sendTelegramMessageWithButtons`:
+
+```typescript
+import * as TG from "./telegram.js";
+// Add sendTelegramMessageWithButtons to the imports used
+
+export async function notifyWalkIn(data: {
+  visitorName: string;
+  purpose: string;
+  branchName: string;
+  orgName: string;
+  requestId: string;
+  orgId: string;
+}) {
+  if (!TG.isConfigured()) return;
+
+  const message = TG.formatWalkInRequest({
+    visitorName: data.visitorName,
+    purpose: data.purpose,
+    branchName: data.branchName,
+    orgName: data.orgName,
+    requestId: data.requestId,
+  });
+
+  const buttons = [[
+    { text: "✅ Approve", callback_data: `approve_${data.requestId}` },
+    { text: "❌ Reject", callback_data: `reject_${data.requestId}` },
+  ]];
+
+  const orgSubs = await getSubscribersForOrg(data.orgId, "notifyWalkIns");
+  await Promise.allSettled(orgSubs.map(sub =>
+    TG.sendTelegramMessageWithButtons(sub.chatId, message, buttons)
+  ));
+}
+```
+
+### 1d. Add a new notifyPreRegistered function
+
+In `artifacts/api-server/src/lib/notifyTelegram.ts`, add:
+
+```typescript
+export async function notifyPreRegistered(data: {
+  visitorName: string;
+  purpose: string;
+  branchName: string;
+  orgName: string;
+  hostName: string;
+  scheduledDate: string;
+  scheduledTimeFrom?: string | null;
+  requestId: string;
+  orgId: string;
+}) {
+  if (!TG.isConfigured()) return;
+
+  const message = TG.formatPreRegisteredRequest({
+    visitorName: data.visitorName,
+    purpose: data.purpose,
+    branchName: data.branchName,
+    orgName: data.orgName,
+    hostName: data.hostName,
+    scheduledDate: data.scheduledDate,
+    scheduledTimeFrom: data.scheduledTimeFrom || undefined,
+    requestId: data.requestId,
+  });
+
+  const buttons = [[
+    { text: "✅ Approve", callback_data: `approve_${data.requestId}` },
+    { text: "❌ Reject", callback_data: `reject_${data.requestId}` },
+  ]];
+
+  const orgSubs = await getSubscribersForOrg(data.orgId, "notifyWalkIns");
+  await Promise.allSettled(orgSubs.map(sub =>
+    TG.sendTelegramMessageWithButtons(sub.chatId, message, buttons)
+  ));
+}
+```
+
+### 1e. Handle callback_query in webhook
+
+In `artifacts/api-server/src/routes/telegram.ts`, the webhook handler currently only handles `update.message`. Add callback_query handling for inline button presses.
+
+At the TOP of the webhook handler (after `res.sendStatus(200)`), add:
+
+```typescript
+// Handle inline button presses (callback_query)
+const callbackQuery = update?.callback_query;
+if (callbackQuery) {
+  const cbChatId = callbackQuery.message?.chat?.id;
+  const cbMessageId = callbackQuery.message?.message_id;
+  const cbData = callbackQuery.data as string;
+  const cbQueryId = callbackQuery.id;
+
+  if (!cbChatId || !cbData) return;
+
+  // Acknowledge the button press immediately
+  await TG.answerCallbackQuery(cbQueryId);
+
+  const subs = await db.select().from(telegramSubscriptionsTable)
+    .where(and(eq(telegramSubscriptionsTable.chatId, cbChatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+    .limit(1);
+  if (!subs[0]) {
+    await TG.editMessageText(cbChatId, cbMessageId, "❌ Your account is not linked. Send /link CODE first.");
+    return;
+  }
+
+  const userId = subs[0].userId;
+  const cbUser = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+  if (!cbUser) return;
+
+  const userPerms = await loadPermissions(cbUser.role, cbUser.roleId);
+  if (!userPerms.includes("visit_requests.approve")) {
+    await TG.editMessageText(cbChatId, cbMessageId, "❌ You don't have permission to approve/reject visit requests.");
+    return;
+  }
+
+  if (cbData.startsWith("approve_")) {
+    const requestId = cbData.replace("approve_", "");
+    const request = (await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1))[0];
+
+    if (!request || request.status !== "pending") {
+      await TG.editMessageText(cbChatId, cbMessageId, "❌ Request not found or already processed.");
+      return;
+    }
+
+    const { generateQrCode, generateToken } = await import("../lib/id.js");
+    const { addHours } = await import("../lib/dateUtils.js");
+    const qrCode = request.qrCode || generateQrCode();
+    const trackingToken = request.trackingToken || generateToken(16);
+
+    await db.update(visitRequestsTable).set({
+      status: "approved", approvedById: userId, approvedAt: new Date(),
+      approvalMethod: "telegram", qrCode, qrExpiresAt: addHours(new Date(), 24), trackingToken,
+    }).where(eq(visitRequestsTable.id, requestId));
+
+    const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+    // Update the original message — remove buttons, show approved status
+    await TG.editMessageText(cbChatId, cbMessageId,
+      `<b>✅ Approved by ${cbUser.name}</b>\n\n` +
+      `👤 ${visitor?.fullName || "Unknown"}\n` +
+      `📋 ${request.purpose}\n` +
+      `📅 ${request.scheduledDate}\n\n` +
+      `🎫 QR: <code>${qrCode}</code>`
+    );
+
+    // Send approval email to visitor
+    if (visitor?.email) {
+      try {
+        const { sendEmail, buildVisitApprovedEmail } = await import("../lib/email.js");
+        const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
+        const baseUrl = process.env.APP_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "");
+        await sendEmail({
+          to: visitor.email,
+          subject: `Your visit to ${org?.name || "the organization"} has been approved`,
+          html: buildVisitApprovedEmail({
+            visitorName: visitor.fullName, organizationName: org?.name || "the organization",
+            scheduledDate: request.scheduledDate, scheduledTime: request.scheduledTimeFrom || undefined,
+            passLink: `${baseUrl}/public/pass/${trackingToken}`, qrCode,
+          }),
+        });
+      } catch (e) { console.error("Email after Telegram approve:", e); }
+    }
+    return;
+  }
+
+  if (cbData.startsWith("reject_")) {
+    const requestId = cbData.replace("reject_", "");
+    const request = (await db.select().from(visitRequestsTable).where(eq(visitRequestsTable.id, requestId)).limit(1))[0];
+
+    if (!request || request.status !== "pending") {
+      await TG.editMessageText(cbChatId, cbMessageId, "❌ Request not found or already processed.");
+      return;
+    }
+
+    await db.update(visitRequestsTable).set({
+      status: "rejected", approvedById: userId, approvedAt: new Date(), rejectionReason: "Rejected via Telegram",
+    }).where(eq(visitRequestsTable.id, requestId));
+
+    const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, request.visitorId)).limit(1))[0];
+
+    // Update original message — remove buttons, show rejected
+    await TG.editMessageText(cbChatId, cbMessageId,
+      `<b>❌ Rejected by ${cbUser.name}</b>\n\n` +
+      `👤 ${visitor?.fullName || "Unknown"}\n` +
+      `📋 ${request.purpose}`
+    );
+
+    // Send rejection email to visitor
+    if (visitor?.email) {
+      try {
+        const { sendEmail, buildVisitRejectedEmail } = await import("../lib/email.js");
+        const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
+        await sendEmail({
+          to: visitor.email,
+          subject: `Your visit request to ${org?.name || "the organization"} was declined`,
+          html: buildVisitRejectedEmail({
+            visitorName: visitor.fullName, organizationName: org?.name || "the organization",
+            rejectionReason: "Rejected via Telegram",
+          }),
+        });
+      } catch (e) { console.error("Email after Telegram reject:", e); }
+    }
+    return;
+  }
+
+  return; // end callback_query handling
+}
+```
+
+Keep the existing text-based /approve_ and /reject_ commands as fallback — they still work if someone types them manually.
+
+### 1f. Add /pending command to list pending requests
+
+In the webhook handler in `telegram.ts`, add a new command handler before the /approve_ handler:
+
+```typescript
+// /pending — List pending visit requests
+if (text === "/pending") {
+  const subs = await db.select().from(telegramSubscriptionsTable)
+    .where(and(eq(telegramSubscriptionsTable.chatId, chatId.toString()), eq(telegramSubscriptionsTable.isActive, true)))
+    .limit(1);
+  if (!subs[0]) {
+    await TG.sendTelegramMessage(chatId, "❌ No linked account. Send /link CODE first.");
+    return;
+  }
+
+  const userId = subs[0].userId;
+  const user = (await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1))[0];
+  if (!user || !user.orgId) {
+    await TG.sendTelegramMessage(chatId, "❌ User not found.");
+    return;
+  }
+
+  const pending = await db.select().from(visitRequestsTable)
+    .where(and(eq(visitRequestsTable.orgId, user.orgId), eq(visitRequestsTable.status, "pending")));
+
+  if (pending.length === 0) {
+    await TG.sendTelegramMessage(chatId, "✅ No pending visit requests. All clear!");
+    return;
+  }
+
+  // Send each pending request as a separate message with approve/reject buttons
+  for (const req of pending.slice(0, 10)) {
+    const visitor = (await db.select().from(visitorsTable).where(eq(visitorsTable.id, req.visitorId)).limit(1))[0];
+    const [branch] = req.branchId ? await db.select().from(branchesTable).where(eq(branchesTable.id, req.branchId)).limit(1) : [null];
+
+    const msg = `<b>⏳ Pending Request</b>\n\n` +
+      `👤 <b>${visitor?.fullName || "Unknown"}</b>\n` +
+      `📋 ${req.purpose}\n` +
+      `🏢 ${branch?.name || "—"}\n` +
+      `📅 ${req.scheduledDate}` +
+      (req.scheduledTimeFrom ? ` at ${req.scheduledTimeFrom}` : "") +
+      `\n📝 Type: ${req.type.replace("_", " ")}`;
+
+    const buttons = [[
+      { text: "✅ Approve", callback_data: `approve_${req.id}` },
+      { text: "❌ Reject", callback_data: `reject_${req.id}` },
+    ]];
+
+    await TG.sendTelegramMessageWithButtons(chatId, msg, buttons);
+  }
+
+  if (pending.length > 10) {
+    await TG.sendTelegramMessage(chatId, `... and ${pending.length - 10} more. Check the portal for the full list.`);
+  }
+  return;
+}
+```
+
+Update the /help command to include /pending:
+```
+`/pending — List pending requests to approve/reject\n` +
+```
+
+---
+
+## PART 2: Send Telegram Notification for Pre-Registered Visits (employee-created)
+
+In `artifacts/api-server/src/routes/visitRequests.ts`, in the POST handler (around line 155, after inserting the visit request and enriching it), add Telegram notification:
+
+```typescript
+import { notifyPreRegistered } from "../lib/notifyTelegram.js";
+
+// After `const enriched = await enrichRequest(requests[0]);` and before `res.status(201).json(enriched);`
+if (enriched.visitor && enriched.branch) {
+  const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+  notifyPreRegistered({
+    visitorName: enriched.visitor.fullName,
+    purpose: enriched.purpose,
+    branchName: enriched.branch.name,
+    orgName: org?.name || "",
+    hostName: enriched.hostUser?.name || req.user!.name,
+    scheduledDate: enriched.scheduledDate,
+    scheduledTimeFrom: enriched.scheduledTimeFrom,
+    requestId: enriched.id,
+    orgId,
+  }).catch(console.error);
+}
+```
+
+---
+
+## PART 3: Full Email Notification Cycle for Visitors
+
+### 3a. Add rejection email template
+
+In `artifacts/api-server/src/lib/email.ts`, add a new function:
+
+```typescript
+export function buildVisitRejectedEmail({
+  visitorName, organizationName, rejectionReason,
+}: {
+  visitorName: string; organizationName: string; rejectionReason?: string;
+}): string {
+  return `
+    <!DOCTYPE html>
+    <html dir="ltr" lang="en">
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 40px 20px;">
+      <div style="max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+        <div style="background: linear-gradient(135deg, #dc2626, #ef4444); padding: 32px; text-align: center;">
+          <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700;">Visit Request Update</h1>
+        </div>
+        <div style="padding: 32px;">
+          <h2 style="color: #1e293b; margin: 0 0 8px; font-size: 20px;">Hello ${visitorName},</h2>
+          <p style="color: #475569; line-height: 1.6; margin: 0 0 20px;">
+            Unfortunately, your visit request to <strong>${organizationName}</strong> could not be approved at this time.
+          </p>
+          ${rejectionReason ? `
+          <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 16px; margin: 0 0 20px;">
+            <p style="margin: 0; color: #991b1b; font-weight: 600;">Reason: ${rejectionReason}</p>
+          </div>
+          ` : ""}
+          <p style="color: #475569; line-height: 1.6; margin: 0;">
+            You may submit a new request or contact the organization directly for more information.
+          </p>
+        </div>
+        <div style="background: #f8fafc; padding: 16px 32px; text-align: center; border-top: 1px solid #e2e8f0;">
+          <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; ${new Date().getFullYear()} Availo Ventry &mdash; Powered by T2</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+```
+
+### 3b. Send rejection email when visit is rejected
+
+In `artifacts/api-server/src/routes/visitRequests.ts`, in the reject handler (PATCH /:requestId/reject), after the Telegram notification, add:
+
+```typescript
+// Send rejection email to visitor
+if (enriched.visitor?.email) {
+  const { sendEmail, buildVisitRejectedEmail } = await import("../lib/email.js");
+  const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+  sendEmail({
+    to: enriched.visitor.email,
+    subject: `Your visit request to ${org?.name || "the organization"} was declined`,
+    html: buildVisitRejectedEmail({
+      visitorName: enriched.visitor.fullName,
+      organizationName: org?.name || "the organization",
+      rejectionReason: enriched.rejectionReason || undefined,
+    }),
+  }).catch(console.error);
+}
+```
+
+### 3c. Show tracking link on booking success page
+
+In `artifacts/ventry/src/pages/public/booking.tsx`:
+
+1. Store the response data after submission:
+```typescript
+const [trackingToken, setTrackingToken] = useState<string | null>(null);
+```
+
+2. Update onSubmit to save the tracking token:
+```typescript
+const onSubmit = async (data: z.infer<typeof bookingSchema>) => {
+  try {
+    const result = await submitMutation.mutateAsync({ slug, data });
+    setTrackingToken(result.trackingToken);
+    setIsSuccess(true);
+  } catch (e) {
+    toast({ title: "Submission Failed", description: "Please try again later.", variant: "destructive" });
+  }
+};
+```
+
+3. Update the success screen to show the tracking link:
+```tsx
+if (isSuccess) {
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
+      <Card className="w-full max-w-md p-8 text-center border-border/50 shadow-xl rounded-3xl animate-in-slide">
+        <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
+          <CheckCircle2 className="w-10 h-10" />
+        </div>
+        <h2 className="text-3xl font-display font-bold text-foreground mb-3">Request Submitted</h2>
+        <p className="text-muted-foreground text-lg mb-6">
+          Your visit request for <strong>{org.name}</strong> has been sent for approval. You will receive an email with your entry pass and QR code once approved.
+        </p>
+        {trackingToken && (
+          <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 mb-6 text-left">
+            <p className="text-sm font-semibold text-blue-900 mb-2">Track your request:</p>
+            <a href={`/public/pass/${trackingToken}`} className="text-sm text-blue-600 hover:underline break-all">
+              {window.location.origin}/public/pass/{trackingToken}
+            </a>
+            <p className="text-xs text-blue-500 mt-2">Bookmark this link to check your request status anytime.</p>
+          </div>
+        )}
+        <Button onClick={() => window.location.reload()} variant="outline" className="h-12 px-8 rounded-xl font-semibold hover-elevate">
+          Submit Another Request
+        </Button>
+      </Card>
+    </div>
+  );
+}
+```
+
+---
+
+## PART 4: Fix "if camera unavailable" Text
+
+### 4a. In the email template
+
+In `artifacts/api-server/src/lib/email.ts`, find line 169:
+```
+Manual Entry Code (if camera unavailable)
+```
+Change to:
+```
+Manual Entry Code
+```
+
+### 4b. On the pass page
+
+In `artifacts/ventry/src/pages/public/pass.tsx`, find line 143:
+```
+If camera is unavailable, provide this code to the receptionist
+```
+Change to:
+```
+You may also provide this code to the receptionist
+```
+
+---
+
+## PART 5: Add /pending to /help and update webhook to handle callback_query
+
+Make sure the /help command in telegram.ts includes:
+```
+/pending — View and manage pending requests
+```
+
+---
+
+## Summary of Files to Modify
+
+- `artifacts/api-server/src/lib/telegram.ts` — Add sendTelegramMessageWithButtons, answerCallbackQuery, editMessageText, formatPreRegisteredRequest, update formatWalkInRequest
+- `artifacts/api-server/src/lib/notifyTelegram.ts` — Update notifyWalkIn to use buttons, add notifyPreRegistered
+- `artifacts/api-server/src/lib/email.ts` — Add buildVisitRejectedEmail, fix "camera unavailable" text
+- `artifacts/api-server/src/routes/telegram.ts` — Add callback_query handler for inline buttons, add /pending command, update /help
+- `artifacts/api-server/src/routes/visitRequests.ts` — Add Telegram notification for pre-registered visits, add rejection email
+- `artifacts/ventry/src/pages/public/booking.tsx` — Show tracking link on success page
+- `artifacts/ventry/src/pages/public/pass.tsx` — Fix "camera unavailable" text
+
+## Execution Order
+1. Update telegram.ts library (new functions)
+2. Update notifyTelegram.ts (buttons + pre-registered)
+3. Update email.ts (rejection template + text fix)
+4. Update telegram.ts routes (callback_query + /pending)
+5. Update visitRequests.ts (pre-registered notification + rejection email)
+6. Update booking.tsx (tracking link)
+7. Update pass.tsx (text fix)
+8. Test:
+   - Submit walk-in request → Telegram shows message with Approve/Reject BUTTONS
+   - Click Approve button → message updates to "Approved by [name]", buttons disappear
+   - Click Reject button → message updates to "Rejected by [name]", buttons disappear
+   - Employee creates pre-registered visit → Telegram notification with buttons appears
+   - Reject a request → visitor gets rejection email
+   - Public booking success → shows tracking link
+   - Send /pending in Telegram → shows list of pending requests with buttons
+   - Check email template → no "if camera unavailable" text

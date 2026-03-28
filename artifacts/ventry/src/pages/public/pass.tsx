@@ -140,7 +140,7 @@ export default function VisitorPass() {
             <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
               <p className="text-xs text-muted-foreground mb-1">Manual Entry Code</p>
               <p className="font-mono font-bold text-lg tracking-wider text-foreground select-all">{passData.qrCodeData}</p>
-              <p className="text-xs text-slate-400 mt-1">If camera is unavailable, provide this code to the receptionist</p>
+              <p className="text-xs text-slate-400 mt-1">You may also provide this code to the receptionist</p>
             </div>
           </div>
         )}

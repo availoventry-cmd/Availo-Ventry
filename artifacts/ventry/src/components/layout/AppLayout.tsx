@@ -168,7 +168,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <div className="flex items-center gap-4">
               <SidebarTrigger className="md:hidden" />
               <h2 className="font-display font-semibold text-lg text-foreground hidden sm:block">
-                {user.organizationName || 'Availo Platform'}
+                {user.organizationName || 'Availo Ventry'}
               </h2>
             </div>
           </header>

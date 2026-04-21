@@ -44,12 +44,22 @@ function getBaseUrl(req: any): string {
   if (process.env.APP_BASE_URL) {
     return process.env.APP_BASE_URL.replace(/\/$/, "");
   }
+  if (process.env.REPLIT_DEPLOYMENT === "1" || process.env.NODE_ENV === "production") {
+    const domains = process.env.REPLIT_DOMAINS;
+    if (domains) {
+      const first = domains.split(",")[0]?.trim();
+      if (first) return `https://${first}`;
+    }
+  }
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}`;
   }
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${proto}://${host}`;
+  if (req?.headers) {
+    const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    if (host) return `${proto}://${host}`;
+  }
+  return "";
 }
 
 export { getBaseUrl };

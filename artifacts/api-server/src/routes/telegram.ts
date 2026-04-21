@@ -517,9 +517,9 @@ router.post("/webhook", async (req, res) => {
 
     if (visitor?.email) {
       try {
-        const { sendEmail, buildVisitApprovedEmail } = await import("../lib/email.js");
+        const { sendEmail, buildVisitApprovedEmail, getBaseUrl } = await import("../lib/email.js");
         const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, request.orgId)).limit(1);
-        const baseUrl = process.env.APP_URL || process.env.APP_BASE_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "");
+        const baseUrl = getBaseUrl(req);
         const passLink = `${baseUrl}/public/pass/${trackingToken}`;
         await sendEmail({
           to: visitor.email,

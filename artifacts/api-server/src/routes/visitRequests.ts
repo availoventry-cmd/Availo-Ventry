@@ -39,7 +39,10 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
       .orderBy(sql`${visitRequestsTable.createdAt} DESC`);
 
     if (user.role === "host_employee") {
-      requests = requests.filter(r => r.hostUserId === user.id);
+      requests = requests.filter(r =>
+        r.hostUserId === user.id ||
+        (r.hostUserId === null && (!user.branchId || r.branchId === user.branchId))
+      );
     }
     if (user.role === "receptionist") {
       const today = new Date().toISOString().split("T")[0];
